@@ -1,0 +1,39 @@
+# XBalanseBot/render.yaml - Чертеж для развертывания XBalanseBot на Render.com
+
+services:
+  # --- Сервис 1: База данных PostgreSQL ---
+  - type: psql
+    name: xbbot-db
+    region: frankfurt
+    plan: free
+    # Render автоматически создаст имя базы и пользователя
+
+  # --- Сервис 2: Веб-сервис для самого бота ---
+  - type: web
+    name: xbalanse # <-- Это станет частью вашего URL
+    runtime: python
+    region: frankfurt
+    branch: master # или main, если ваша основная ветка называется main
+    plan: free
+    
+    # Команды для сборки и запуска
+    buildCommand: "poetry install --no-root --without dev"
+    startCommand: "poetry run python main.py"
+
+    # Переменные окружения (секреты мы добавим в UI)
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: DEV_MODE
+        value: False
+      - key: WEBHOOK_HOST
+        # Эта специальная переменная автоматически подставит публичный URL этого сервиса
+        value: ${RENDER_EXTERNAL_URL}
+      - key: DATABASE_URL
+        # Эта переменная возьмет строку подключения из нашего сервиса базы данных 'xbbot-db'
+        fromService:
+          type: psql
+          name: xbbot-db
+          property: connectionString
+      # !!! ВАЖНО: Секретные переменные (BOT_TOKEN и др.) мы добавим вручную в UI
+      # Это безопаснее, чем хранить их в файле.

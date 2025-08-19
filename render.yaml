@@ -1,39 +1,41 @@
 # XBalanseBot/render.yaml - Чертеж для развертывания XBalanseBot на Render.com
+# https://render.com/docs/blueprint-spec
 
-services:
-  # --- Сервис 1: База данных PostgreSQL ---
-  - type: psql
-    name: xbbot-db
+# Сначала определяем все базы данных, которые нам нужны.
+databases:
+  - name: xbbot-db      # Имя, по которому мы будем обращаться к базе внутри этого файла.
     region: frankfurt
-    plan: free
-    # Render автоматически создаст имя базы и пользователя
+    plan: free         # Тарифный план.
 
-  # --- Сервис 2: Веб-сервис для самого бота ---
+# Затем определяем все наши сервисы (приложения, воркеры и т.д.).
+services:
+  # Наш единственный сервис - это веб-сервер для бота.
   - type: web
-    name: xbalanse # <-- Это станет частью вашего URL
+    name: xbalansebot-app # Имя сервиса. Оно станет частью публичного URL.
     runtime: python
     region: frankfurt
-    branch: master # или main, если ваша основная ветка называется main
+    branch: master       # Ветка в Git, за которой нужно следить.
     plan: free
-    
-    # Команды для сборки и запуска
+
+    # Команды для сборки и запуска проекта.
     buildCommand: "poetry install --no-root --without dev"
     startCommand: "poetry run python main.py"
 
-    # Переменные окружения (секреты мы добавим в UI)
+    # Переменные окружения для этого сервиса.
     envVars:
       - key: PYTHON_VERSION
         value: 3.11
       - key: DEV_MODE
         value: False
-      - key: WEBHOOK_HOST
-        # Эта специальная переменная автоматически подставит публичный URL этого сервиса
-        value: ${RENDER_EXTERNAL_URL}
       - key: DATABASE_URL
-        # Эта переменная возьмет строку подключения из нашего сервиса базы данных 'xbbot-db'
-        fromService:
-          type: psql
+        # Берем строку подключения из базы данных 'xbbot-db', определенной выше.
+        fromDatabase:
           name: xbbot-db
           property: connectionString
-      # !!! ВАЖНО: Секретные переменные (BOT_TOKEN и др.) мы добавим вручную в UI
-      # Это безопаснее, чем хранить их в файле.
+      - key: WEBHOOK_HOST
+        # Берем автоматически сгенерированное имя хоста для этого сервиса.
+        # Это самый правильный способ получить URL.
+        fromService:
+          type: web
+          name: xbalansebot-app
+          property: host

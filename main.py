@@ -35,10 +35,6 @@ from dotenv import load_dotenv
 # --- IMPORTANT: Make sure the directory of this file is on sys.path ---
 # Some hosting environments (e.g., Render.com) may execute the script with a
 # different working directory; explicitly ensuring the script directory is in
-# sys.path stabilizes absolute imports like "from app.config import ...".
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
 
 # Load .env early for local development (in production, env vars are provided by the platform)
 load_dotenv()

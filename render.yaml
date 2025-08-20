@@ -21,7 +21,7 @@ services:
     buildCommand: "poetry install --no-root --without dev"
     startCommand: ".venv/bin/python main.py" 
 
-    # Переменные окружения для этого сервиса.
+    # Переменные окружения для render.com
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.4

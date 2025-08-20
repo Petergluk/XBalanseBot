@@ -46,6 +46,7 @@ env/
 # Файлы конфигурации
 config.py
 .env
+.env.render
 
 # Файлы IDE
 .idea/

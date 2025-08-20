@@ -25,6 +25,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13
+      - key: POETRY_VERSION
+        value: 1.8.2        
       - key: DEV_MODE
         value: False
       - key: DATABASE_URL
@@ -33,8 +35,7 @@ services:
           name: xbbot-db
           property: connectionString
       - key: WEBHOOK_HOST
-        # Берем автоматически сгенерированное имя хоста для этого сервиса.
-        # Это самый правильный способ получить URL.
+        # Берем автоматически сгенерированное имя хоста для сервиса.
         fromService:
           type: web
           name: xbalansebot-app

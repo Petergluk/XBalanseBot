@@ -19,7 +19,7 @@ services:
 
     # Команды для сборки и запуска проекта.
     buildCommand: "poetry install --no-root --without dev"
-    startCommand: ".venv/bin/python main.py"
+    startCommand: ".venv/bin/python main.py" 
 
     # Переменные окружения для этого сервиса.
     envVars:

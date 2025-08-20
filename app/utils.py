@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from aiogram import Bot
-from config import MAIN_GROUP_ID, CURRENCY_SYMBOL
+from app.config import MAIN_GROUP_ID, CURRENCY_SYMBOL
 from app.database import db
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from app.database import db
 from app.utils import format_amount, ensure_user_exists, is_user_in_group
-from config import WEBHOOK_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
+from app.config import WEBHOOK_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
 
 logger = logging.getLogger(__name__)
 

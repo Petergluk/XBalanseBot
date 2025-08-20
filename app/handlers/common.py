@@ -6,7 +6,7 @@ from aiogram.filters import Command, CommandStart, ChatMemberUpdatedFilter, JOIN
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
-from config import (
+from app.config import (
     CURRENCY_SYMBOL, MAIN_GROUP_ID, DEFAULT_WELCOME_MESSAGE_BOT, 
     DEFAULT_WELCOME_MESSAGE_GROUP, DEFAULT_HELP_TEXT_USER, DEFAULT_HELP_TEXT_ADMIN_ADDON,
     DEFAULT_HELP_TEXT_GROUP

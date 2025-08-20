@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 # --- IMPORTANT: Make sure the directory of this file is on sys.path ---
 # Some hosting environments (e.g., Render.com) may execute the script with a
 # different working directory; explicitly ensuring the script directory is in
-# sys.path stabilizes absolute imports like "from config import ...".
+# sys.path stabilizes absolute imports like "from app.config import ...".
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
@@ -56,7 +56,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Local configuration and modules
-from config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, WEBHOOK_HOST
+from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, WEBHOOK_HOST
 from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers
 from app.services import scheduler_jobs

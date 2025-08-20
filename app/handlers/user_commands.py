@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 from app.database import db
 from app.states import TransferStates
 from app.utils import format_amount, get_user_balance, get_transaction_count, is_user_in_group, ensure_user_exists, format_transactions_history
-from config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL
 
 router = Router()
 logger = logging.getLogger(__name__)

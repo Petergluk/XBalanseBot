@@ -13,7 +13,7 @@ from app.states import ActivityCreationStates, ActivityEditStates
 from app.database import db
 from app.utils import is_admin, format_amount
 from app.handlers.event_handlers import weekdays_map
-from config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL
 
 router = Router()
 logger = logging.getLogger(__name__)

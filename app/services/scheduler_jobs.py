@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from app.database import db
 from app.utils import format_amount, get_next_run_time
-from config import CURRENCY_SYMBOL, DEFAULT_REMINDER_TEXT
+from app.config import CURRENCY_SYMBOL, DEFAULT_REMINDER_TEXT
 
 logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")

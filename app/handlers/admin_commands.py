@@ -12,7 +12,7 @@ from psycopg.rows import dict_row
 from app.database import db
 from app.states import AdminEditStates
 from app.utils import is_admin, format_amount, get_user_balance, format_transactions_history
-from config import CURRENCY_SYMBOL, DEFAULT_GIDE_TEXT, DEFAULT_TEST_COMMANDS_TEXT, DEFAULT_REMINDER_TEXT, DEFAULT_WELCOME_MESSAGE_GROUP, DEFAULT_WELCOME_MESSAGE_BOT
+from app.config import CURRENCY_SYMBOL, DEFAULT_GIDE_TEXT, DEFAULT_TEST_COMMANDS_TEXT, DEFAULT_REMINDER_TEXT, DEFAULT_WELCOME_MESSAGE_GROUP, DEFAULT_WELCOME_MESSAGE_BOT
 
 router = Router()
 logger = logging.getLogger(__name__)

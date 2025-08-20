@@ -16,7 +16,7 @@ from app.keyboards import (
 )
 from app.states import EventCreationStates, EventEditStates
 from app.utils import is_admin, format_amount, get_next_run_time
-from config import CURRENCY_SYMBOL, DEFAULT_REMINDER_TEXT
+from app.config import CURRENCY_SYMBOL, DEFAULT_REMINDER_TEXT
 from app.services.scheduler_jobs import schedule_event_jobs, remove_event_jobs
 
 router = Router()

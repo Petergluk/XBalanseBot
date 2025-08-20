@@ -1,4 +1,4 @@
-# XBalanseBot/render.yaml - Чертеж для развертывания XBalanseBot на Render.com
+# XBalanseBot/render.yaml - данные для развертывания XBalanseBot на Render.com
 # https://render.com/docs/blueprint-spec
 
 # Сначала определяем все базы данных, которые нам нужны.

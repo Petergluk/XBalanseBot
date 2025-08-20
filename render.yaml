@@ -24,7 +24,7 @@ services:
     # Переменные окружения для этого сервиса.
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11
+        value: 3.13
       - key: DEV_MODE
         value: False
       - key: DATABASE_URL

@@ -1,5 +1,5 @@
 # XBalanseBot/app/services/webhook_handler.py
-# v1.5.3 - 2025-08-16
+# v1.5.4 - 2025-08-20 (Local run fix)
 import logging
 import asyncio
 from decimal import Decimal
@@ -9,7 +9,8 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from app.database import db
 from app.utils import format_amount, ensure_user_exists, is_user_in_group
-from app.config import WEBHOOK_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
+# ИЗМЕНЕНИЕ: Импортируем WEB_SERVER_HOST вместо WEBHOOK_HOST.
+from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +94,10 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher):
     
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
+    # ИЗМЕНЕНИЕ: Используем WEB_SERVER_HOST для указания адреса прослушивания.
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEBHOOK_PORT)
     
-    logger.info(f"Starting aiohttp server on {WEBHOOK_HOST}:{WEBHOOK_PORT}...")
+    logger.info(f"Starting aiohttp server on {WEB_SERVER_HOST}:{WEBHOOK_PORT}...")
     await site.start()
     
     # This will run forever until interrupted

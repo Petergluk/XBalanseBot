@@ -1,5 +1,3 @@
-REM # XBalanseBot/!RUN.bat
-REM # v1.5.2 - 2025-08-16
 @echo off
 TITLE XBalanseBot Lifecycle Manager
 chcp 65001 > nul
@@ -8,6 +6,8 @@ setlocal
 ECHO =================================
 ECHO XBalanseBot Lifecycle Manager
 ECHO %DATE% %TIME%
+python --version
+ECHO Working Directory: %CD%
 ECHO =================================
 ECHO.
 

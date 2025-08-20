@@ -1,5 +1,5 @@
-# XBalanseBot/config.py
-# v1.5.0 - 2025-08-15
+# XBalanseBot/app/config.py
+# v1.5.2 - 2025-08-20 (Local run fix)
 import os
 
 # --- Основные настройки ---
@@ -18,7 +18,10 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 CURRENCY_SYMBOL = "Ӫ"
 
 # --- Настройки вебхуков ---
-WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST", '0.0.0.0')
+# ИЗМЕНЕНИЕ: Добавлена переменная WEB_SERVER_HOST.
+# Она определяет, на каком адресе будет слушать внутренний веб-сервер.
+# '0.0.0.0' - это стандартное значение для Render и Docker.
+WEB_SERVER_HOST = os.environ.get("WEB_SERVER_HOST", '0.0.0.0')
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080)) 
 TRIBUTE_WEBHOOK_SECRET = os.environ.get("TRIBUTE_WEBHOOK_SECRET")
 

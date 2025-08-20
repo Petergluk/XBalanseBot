@@ -1,6 +1,6 @@
 # XBalanseBot/main.py
-# v1.8.2 - 2025-08-20 (Render.com import fix)
-# 2025-08-20 11:33:20
+# v1.8.3 - 2025-08-20 (Render.com runtime fix)
+# 2025-08-20 14:06:00
 """
 Main entry point of XBalanseBot.
 
@@ -19,6 +19,8 @@ External dependencies:
 - Local modules: config, app.database, app.handlers.*, app.services.*
 
 Recent changes (changelog):
+- v1.8.3: FIX — Moved WEBHOOK_HOST retrieval from config import to main() runtime. This ensures the
+           Render.com-provided environment variable is available when read, fixing the DNS resolve error.
 - v1.8.2: FIX — Added explicit sys.path injection for the current directory before importing `config`
            to prevent ModuleNotFoundError on Render.com.
 - v1.8.1: FIX — Corrected a previous attempt to fix Render.com pathing issues.
@@ -57,7 +59,8 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Local configuration and modules
-from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, WEBHOOK_HOST
+# ИЗМЕНЕНИЕ: Убрали WEBHOOK_HOST из импорта, будем получать его позже.
+from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE
 from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers
 from app.services import scheduler_jobs
@@ -207,6 +210,8 @@ async def main():
             await dp.start_polling(bot)
         else:
             # Production: webhook mode (Render.com)
+            # ИЗМЕНЕНИЕ: Получаем WEBHOOK_HOST здесь, во время выполнения, а не при импорте.
+            WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
             if not WEBHOOK_HOST:
                 logger.critical("FATAL: WEBHOOK_HOST is not set for production mode!")
                 return

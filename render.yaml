@@ -36,7 +36,3 @@ services:
           property: connectionString         
       - key: WEBHOOK_HOST
         value: xbalansebot-app.onrender.com          
-        fromService:
-          type: web
-          name: xbalansebot-app
-          property: host

@@ -33,9 +33,9 @@ services:
         # Берем строку подключения из базы данных 'xbbot-db', определенной выше.
         fromDatabase:
           name: xbbot-db
-          property: connectionString
+          property: connectionString         
       - key: WEBHOOK_HOST
-        # Берем автоматически сгенерированное имя хоста для сервиса.
+        value: xbalansebot-app.onrender.com          
         fromService:
           type: web
           name: xbalansebot-app

@@ -9,9 +9,8 @@ databases:
 
 # Затем определяем все наши сервисы (приложения, воркеры и т.д.).
 services:
-  # Наш единственный сервис - это веб-сервер для бота.
   - type: web
-    name: xbalansebot-app # Имя сервиса. Оно станет частью публичного URL.
+    name: xbalansebot-app # Имя сервиса, станет частью публичного URL.
     runtime: python
     region: frankfurt
     branch: master       # Ветка в Git, за которой нужно следить.
@@ -20,7 +19,7 @@ services:
 
     # Команды для сборки и запуска проекта.
     buildCommand: "poetry install --no-root --without dev"
-    startCommand: "poetry run python main.py"
+    startCommand: ".venv/bin/python main.py"
 
     # Переменные окружения для этого сервиса.
     envVars:

@@ -1,6 +1,6 @@
 # XBalanseBot/main.py
-# v1.8.1 - 2025-08-20 (Render.com import fix for config)
-# 2025-08-20 12:50:00
+# v1.8.2 - 2025-08-20 (Render.com import fix)
+# 2025-08-20 11:33:20
 """
 Main entry point of XBalanseBot.
 
@@ -19,8 +19,9 @@ External dependencies:
 - Local modules: config, app.database, app.handlers.*, app.services.*
 
 Recent changes (changelog):
-- v1.8.1: FIX — Added explicit sys.path injection for the current directory before importing `config`
+- v1.8.2: FIX — Added explicit sys.path injection for the current directory before importing `config`
            to prevent ModuleNotFoundError on Render.com.
+- v1.8.1: FIX — Corrected a previous attempt to fix Render.com pathing issues.
 - v1.8.0: FEAT — Production-ready webhook server launch for Render.com; improved logging and lifecycle.
 """
 
@@ -32,9 +33,13 @@ import subprocess
 from datetime import datetime
 from dotenv import load_dotenv
 
-# --- IMPORTANT: Make sure the directory of this file is on sys.path ---
+# --- IMPORTANT: Make sure the project's root directory is on sys.path ---
 # Some hosting environments (e.g., Render.com) may execute the script with a
-# different working directory; explicitly ensuring the script directory is in
+# different working directory. This block explicitly adds the script's directory
+# to the Python path to ensure that local modules like 'app' can be found.
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
 # Load .env early for local development (in production, env vars are provided by the platform)
 load_dotenv()

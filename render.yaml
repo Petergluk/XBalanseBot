@@ -6,7 +6,6 @@ databases:
   - name: xbbot-db      # Имя, по которому мы будем обращаться к базе внутри этого файла.
     region: frankfurt
     plan: free         # Тарифный план.
-    rootDir: . # <-- корневая директория проекта
 
 # Затем определяем все наши сервисы (приложения, воркеры и т.д.).
 services:
@@ -17,6 +16,7 @@ services:
     region: frankfurt
     branch: master       # Ветка в Git, за которой нужно следить.
     plan: free
+    rootDir: . # <-- корневая директория проекта
 
     # Команды для сборки и запуска проекта.
     buildCommand: "poetry install --no-root --without dev"

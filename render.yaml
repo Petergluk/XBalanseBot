@@ -1,6 +1,6 @@
 # XBalanseBot/render.yaml
-# v1.3.0 - 2025-08-20 (Switched to Web Cron model)
-# 2025-08-20 19:30:00
+# v1.3.1 - 2025-08-20 (Fixed YAML syntax for Cron Job and Env Group)
+# 2025-08-20 20:10:00
 # https://render.com/docs/blueprint-spec
 
 databases:
@@ -50,21 +50,16 @@ services:
           property: connectionString
       - key: WEBHOOK_HOST
         value: xbalansebot-app.onrender.com
-      - fromEnvGroup: xbalansebot-secrets # Подключаем группу секретов
+      - fromEnvGroup: xbalansebot-secrets # ИСПРАВЛЕННЫЙ СИНТАКСИС
 
-  # ИЗМЕНЕНИЕ: Cron Job теперь не запускает скрипт, а делает HTTP-запрос
+  # Cron Job для "пробуждения" основного сервиса
   - type: cron
     name: xbalansebot-waker
     region: frankfurt
-    branch: master # Важно, чтобы ветка была та же
-    plan: free
-    schedule: "*/14 * * * *" # Каждые 14 минут, чтобы будить основной сервис
-    # Команда использует curl для отправки POST-запроса на наш секретный URL
-    # Она берет адрес основного сервиса и секрет из переменных окружения.
+    # ИСПРАВЛЕНИЕ: Убраны runtime и plan, так как они не поддерживаются для Cron Job
+    schedule: "*/14 * * * *" # Каждые 14 минут
     startCommand: "curl -X POST -H \"X-Cron-Secret: $CRON_JOB_SECRET\" https://$WEBHOOK_HOST/webhook/cron || true"
     envVars:
-        # Переменные, чтобы curl знал, куда и с каким секретом стучаться
       - key: WEBHOOK_HOST
         value: xbalansebot-app.onrender.com
-      - key: CRON_JOB_SECRET
-        fromEnvGroup: xbalansebot-secrets
+      - fromEnvGroup: xbalansebot-secrets # ИСПРАВЛЕННЫЙ СИНТАКСИС

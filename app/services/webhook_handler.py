@@ -1,5 +1,6 @@
 # XBalanseBot/app/services/webhook_handler.py
-# v1.5.4 - 2025-08-20 (Local run fix)
+# v1.5.5 - 2025-08-20 (Web Cron support)
+# 2025-08-20 19:30:00
 import logging
 import asyncio
 from decimal import Decimal
@@ -9,10 +10,30 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from app.database import db
 from app.utils import format_amount, ensure_user_exists, is_user_in_group
-# ИЗМЕНЕНИЕ: Импортируем WEB_SERVER_HOST вместо WEBHOOK_HOST.
-from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
+from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET, CRON_JOB_SECRET
+from app.services.scheduler_jobs import process_demurrage
 
 logger = logging.getLogger(__name__)
+
+
+async def handle_cron_job(request: web.Request):
+    """
+    Обрабатывает запрос от Render Cron Job для "пробуждения" сервиса.
+    Проверяет секретный ключ для безопасности.
+    В текущей реализации этот эндпоинт используется только для того, чтобы
+    не дать сервису "уснуть". Логика демерреджа запускается внутренним
+    планировщиком apscheduler в main.py, который теперь будет работать постоянно.
+    """
+    secret = request.headers.get("X-Cron-Secret")
+
+    if not CRON_JOB_SECRET or secret != CRON_JOB_SECRET:
+        logger.warning("Cron job endpoint called with invalid or missing secret.")
+        return web.Response(status=403, text="Forbidden: Invalid secret")
+
+    logger.info("Cron job 'waker' endpoint triggered successfully. Service is active.")
+    # Просто отвечаем, что все хорошо. Основная работа делается в apscheduler.
+    return web.Response(status=200, text="OK: Service awake.")
+
 
 async def handle_tribute_webhook(request: web.Request):
     """Обработка вебхука от Tribute для пополнения баланса."""
@@ -83,22 +104,21 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher):
     app = web.Application()
     app['bot'] = bot
     
-    # Обработчик для вебхуков Telegram
     handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     handler.register(app, path="/webhook/telegram")
     
-    # Обработчик для вебхуков Tribute
     app.router.add_post('/webhook/tribute', handle_tribute_webhook)
     
+    # НОВЫЙ ОБРАБОТЧИК: для Cron Job
+    app.router.add_post('/webhook/cron', handle_cron_job)
+
     setup_application(app, dp, bot=bot)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    # ИЗМЕНЕНИЕ: Используем WEB_SERVER_HOST для указания адреса прослушивания.
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEBHOOK_PORT)
     
     logger.info(f"Starting aiohttp server on {WEB_SERVER_HOST}:{WEBHOOK_PORT}...")
     await site.start()
     
-    # This will run forever until interrupted
     await asyncio.Event().wait()

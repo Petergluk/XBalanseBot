@@ -1,38 +1,70 @@
-# XBalanseBot/render.yaml - данные для развертывания XBalanseBot на Render.com
+# XBalanseBot/render.yaml
+# v1.3.0 - 2025-08-20 (Switched to Web Cron model)
+# 2025-08-20 19:30:00
 # https://render.com/docs/blueprint-spec
 
-# Сначала определяем все базы данных, которые нам нужны.
 databases:
-  - name: xbbot-db      # Имя, по которому мы будем обращаться к базе внутри этого файла.
+  - name: xbbot-db
     region: frankfurt
-    plan: free         # Тарифный план.
+    plan: free
 
-# Затем определяем все наши сервисы (приложения, воркеры и т.д.).
+# --- ГРУППА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
+# Чтобы не дублировать секреты, создадим группу.
+# В настройках Render (вкладка Environment) создайте группу с таким же именем
+# и добавьте туда BOT_TOKEN, MAIN_GROUP_ID, SUPER_ADMIN_ID, TRIBUTE_WEBHOOK_SECRET и CRON_JOB_SECRET.
+envVarGroups:
+  - name: xbalansebot-secrets
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: MAIN_GROUP_ID
+        sync: false
+      - key: SUPER_ADMIN_ID
+        sync: false
+      - key: TRIBUTE_WEBHOOK_SECRET
+        sync: false
+      - key: CRON_JOB_SECRET
+        generateValue: true # Render сгенерирует случайное значение при первом деплое
+
 services:
+  # Основной сервис для ответов бота
   - type: web
-    name: xbalansebot-app # Имя сервиса, станет частью публичного URL.
+    name: xbalansebot-app
     runtime: python
     region: frankfurt
-    branch: master       # Ветка в Git, за которой нужно следить.
+    branch: master
     plan: free
-    rootDir: . # <-- корневая директория проекта
-
-    # Команды для сборки и запуска проекта.
+    rootDir: .
     buildCommand: "poetry install --no-root --without dev"
-    startCommand: ".venv/bin/python main.py" 
-
-    # Переменные окружения для render.com
+    startCommand: ".venv/bin/python main.py"
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.4
       - key: POETRY_VERSION
-        value: 2.1.3        
+        value: 2.1.3
       - key: DEV_MODE
         value: False
       - key: DATABASE_URL
-        # Берем строку подключения из базы данных 'xbbot-db', определенной выше.
         fromDatabase:
           name: xbbot-db
-          property: connectionString         
+          property: connectionString
       - key: WEBHOOK_HOST
-        value: xbalansebot-app.onrender.com          
+        value: xbalansebot-app.onrender.com
+      - fromEnvGroup: xbalansebot-secrets # Подключаем группу секретов
+
+  # ИЗМЕНЕНИЕ: Cron Job теперь не запускает скрипт, а делает HTTP-запрос
+  - type: cron
+    name: xbalansebot-waker
+    region: frankfurt
+    branch: master # Важно, чтобы ветка была та же
+    plan: free
+    schedule: "*/14 * * * *" # Каждые 14 минут, чтобы будить основной сервис
+    # Команда использует curl для отправки POST-запроса на наш секретный URL
+    # Она берет адрес основного сервиса и секрет из переменных окружения.
+    startCommand: "curl -X POST -H \"X-Cron-Secret: $CRON_JOB_SECRET\" https://$WEBHOOK_HOST/webhook/cron || true"
+    envVars:
+        # Переменные, чтобы curl знал, куда и с каким секретом стучаться
+      - key: WEBHOOK_HOST
+        value: xbalansebot-app.onrender.com
+      - key: CRON_JOB_SECRET
+        fromEnvGroup: xbalansebot-secrets

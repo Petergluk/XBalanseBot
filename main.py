@@ -1,6 +1,6 @@
 # XBalanseBot/main.py
-# v1.8.3 - 2025-08-20 (Render.com runtime fix)
-# 2025-08-20 14:06:00
+# v1.8.5 - 2025-08-20 (Switched to Web Cron model)
+# 2025-08-20 19:30:00
 """
 Main entry point of XBalanseBot.
 
@@ -19,12 +19,12 @@ External dependencies:
 - Local modules: config, app.database, app.handlers.*, app.services.*
 
 Recent changes (changelog):
-- v1.8.3: FIX — Moved WEBHOOK_HOST retrieval from config import to main() runtime. This ensures the
-           Render.com-provided environment variable is available when read, fixing the DNS resolve error.
-- v1.8.2: FIX — Added explicit sys.path injection for the current directory before importing `config`
-           to prevent ModuleNotFoundError on Render.com.
-- v1.8.1: FIX — Corrected a previous attempt to fix Render.com pathing issues.
-- v1.8.0: FEAT — Production-ready webhook server launch for Render.com; improved logging and lifecycle.
+- v1.8.5: REFACTOR - Switched to a "Web Cron" model. The internal apscheduler now handles all jobs
+           again. An external Render Cron Job acts as a "waker" by hitting a secret endpoint,
+           preventing the free instance from sleeping. This simplifies future migration to paid plans.
+- v1.8.4: REFACTOR — Removed demurrage scheduling from the main application's apscheduler.
+- v1.8.3: FIX — Moved WEBHOOK_HOST retrieval from config import to main() runtime.
+- v1.8.2: FIX — Added explicit sys.path injection for the current directory.
 """
 
 import asyncio
@@ -36,14 +36,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # --- IMPORTANT: Make sure the project's root directory is on sys.path ---
-# Some hosting environments (e.g., Render.com) may execute the script with a
-# different working directory. This block explicitly adds the script's directory
-# to the Python path to ensure that local modules like 'app' can be found.
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
-# Load .env early for local development (in production, env vars are provided by the platform)
 load_dotenv()
 
 from aiogram import Bot, Dispatcher
@@ -58,8 +54,6 @@ from apscheduler.triggers.cron import CronTrigger
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# Local configuration and modules
-# ИЗМЕНЕНИЕ: Убрали WEBHOOK_HOST из импорта, будем получать его позже.
 from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE
 from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers
@@ -85,17 +79,7 @@ logger = logging.getLogger(__name__)
 
 
 async def logging_middleware(handler, event, data: dict):
-    """
-    Outer middleware for unified update logging.
-
-    Args:
-        handler: Next handler in the aiogram chain.
-        event: Incoming event instance (Message/CallbackQuery/ChatMemberUpdated).
-        data (dict): Aiogram context data.
-
-    Returns:
-        Any: Result from the next handler.
-    """
+    """Outer middleware for unified update logging."""
     user = data.get('event_from_user')
     if user:
         if isinstance(event, Message):
@@ -110,10 +94,7 @@ async def logging_middleware(handler, event, data: dict):
 
 
 async def setup_super_admin():
-    """
-    Ensure the super admin exists and has is_admin flag.
-    Uses SUPER_ADMIN_ID from config.
-    """
+    """Ensure the super admin exists and has is_admin flag."""
     logger.info("Checking for super admin setup...")
     if not SUPER_ADMIN_ID:
         return
@@ -128,15 +109,11 @@ async def setup_super_admin():
 
 async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
     """
-    Configure the background scheduler:
-    - Daily demurrage
-    - Jobs for all active events
-
-    Args:
-        bot (Bot): Aiogram bot instance (required by jobs).
-        scheduler (AsyncIOScheduler): The asyncio scheduler.
+    Configure the background scheduler.
+    On free Render plan, it relies on an external Cron Job to "wake it up"
+    to ensure scheduled jobs are processed.
     """
-    # Schedule daily demurrage at 00:01 MSK
+    # Schedule daily demurrage at 00:01 MSK.
     scheduler.add_job(scheduler_jobs.process_demurrage, CronTrigger(hour=0, minute=1), args=(bot,))
 
     # Schedule event jobs (payments + reminders)
@@ -149,42 +126,22 @@ async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
 
 
 async def main():
-    """
-    Bot bootstrap:
-    - Validate configuration
-    - Initialize DB pool
-    - Ensure super admin
-    - Start scheduler
-    - Register routers
-    - Start bot in polling (DEV) or webhook (PROD) mode
-    """
+    """Bot bootstrap."""
     logger.info("Starting bot initialization...")
 
-    # Validate token presence
     if not BOT_TOKEN:
         logger.critical("FATAL: BOT_TOKEN is not found! Bot cannot start.")
         return
 
-    # Create scheduler with MSK timezone
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-
-    # Initialize bot instance
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode="HTML")
-    )
-    # Attach scheduler to bot for convenient access in handlers/services
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     bot.scheduler = scheduler
-
-    # Dispatcher with in-memory FSM storage
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Global logging middleware
     dp.message.outer_middleware(logging_middleware)
     dp.callback_query.outer_middleware(logging_middleware)
     dp.chat_member.outer_middleware(logging_middleware)
 
-    # Register routers
     dp.include_router(common.router)
     dp.include_router(admin_commands.router)
     dp.include_router(user_commands.router)
@@ -192,25 +149,15 @@ async def main():
     dp.include_router(event_handlers.router)
 
     try:
-        # Initialize database connection pool and schema
         await db.initialize()
-
-        # Ensure super admin exists
         await setup_super_admin()
-
-        # Prepare scheduler jobs
         await setup_scheduler(bot, scheduler)
-
-        # Remove previous webhook (prevents conflicts when switching modes)
         await bot.delete_webhook(drop_pending_updates=True)
 
         if DEV_MODE:
-            # Development: long polling
             logger.info("Bot is running in DEVELOPMENT mode (polling).")
             await dp.start_polling(bot)
         else:
-            # Production: webhook mode (Render.com)
-            # ИЗМЕНЕНИЕ: Получаем WEBHOOK_HOST здесь, во время выполнения, а не при импорте.
             WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
             if not WEBHOOK_HOST:
                 logger.critical("FATAL: WEBHOOK_HOST is not set for production mode!")
@@ -220,21 +167,19 @@ async def main():
             webhook_url = f"https://{WEBHOOK_HOST}/webhook/telegram"
             await bot.set_webhook(webhook_url)
             logger.info(f"Webhook set to: {webhook_url}")
-
-            # Launch aiohttp server to accept Telegram and Tribute webhooks
             await run_webhook_server(bot, dp)
 
     finally:
-        # Graceful shutdown
         if scheduler.running:
             scheduler.shutdown()
             logger.info("Scheduler stopped.")
-
-        await db.close()
+        
+        if db.pool and not db.pool.is_closed():
+            await db.close()
+        
         await bot.session.close()
         logger.info("Bot session and database pool closed.")
 
-        # Stop docker-compose only in development mode
         if DEV_MODE:
             logger.info("Stopping docker-compose services...")
             try:

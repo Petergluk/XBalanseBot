@@ -109,9 +109,6 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher):
     
     app.router.add_post('/webhook/tribute', handle_tribute_webhook)
     
-    # НОВЫЙ ОБРАБОТЧИК: для Cron Job
-    app.router.add_post('/webhook/cron', handle_cron_job)
-
     setup_application(app, dp, bot=bot)
     
     runner = web.AppRunner(app)

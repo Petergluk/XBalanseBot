@@ -49,18 +49,5 @@ services:
           property: connectionString
       - key: WEBHOOK_HOST
         value: xbalansebot-app.onrender.com
-      # ИСПРАВЛЕННЫЙ СИНТАКСИС: используется 'fromGroup'
-      - fromGroup: xbalansebot-secrets
-
-  # Cron Job для "пробуждения" основного сервиса
-  - type: cron
-    name: xbalansebot-waker
-    region: frankfurt
-    # ИСПРАВЛЕНИЕ: Убраны 'runtime', 'plan', 'branch', 'rootDir' - они не поддерживаются для Cron Job
-    schedule: "*/14 * * * *" # Каждые 14 минут
-    startCommand: "curl -X POST -H \"X-Cron-Secret: $CRON_JOB_SECRET\" https://$WEBHOOK_HOST/webhook/cron || true"
-    envVars:
-      - key: WEBHOOK_HOST
-        value: xbalansebot-app.onrender.com
-      # ИСПРАВЛЕННЫЙ СИНТАКСИС: используется 'fromGroup' для получения секрета
-      - fromGroup: xbalansebot-secrets
+        
+ 

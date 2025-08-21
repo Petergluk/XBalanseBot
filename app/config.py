@@ -22,8 +22,7 @@ CURRENCY_SYMBOL = "Ӫ"
 WEB_SERVER_HOST = os.environ.get("WEB_SERVER_HOST", '0.0.0.0')
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080)) 
 TRIBUTE_WEBHOOK_SECRET = os.environ.get("TRIBUTE_WEBHOOK_SECRET")
-# НОВЫЙ СЕКРЕТ: Для защиты эндпоинта, который запускает Cron
-CRON_JOB_SECRET = os.environ.get("CRON_JOB_SECRET")
+
 
 # Переключатель режимов. По умолчанию - серверный (False).
 DEV_MODE = os.environ.get("DEV_MODE", "False").lower() in ('true', '1', 't')

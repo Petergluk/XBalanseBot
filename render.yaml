@@ -9,8 +9,6 @@ databases:
     plan: free
 
 # --- ГРУППА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
-# В настройках Render (вкладка Environment) создайте группу с таким же именем
-# и добавьте туда BOT_TOKEN, MAIN_GROUP_ID, SUPER_ADMIN_ID, TRIBUTE_WEBHOOK_SECRET и CRON_JOB_SECRET.
 envVarGroups:
   - name: xbalansebot-secrets
     envVars:
@@ -22,8 +20,7 @@ envVarGroups:
         sync: false
       - key: TRIBUTE_WEBHOOK_SECRET
         sync: false
-      - key: CRON_JOB_SECRET
-        generateValue: true # Render сгенерирует случайное значение при первом деплое
+
 
 services:
   # Основной сервис для ответов бота

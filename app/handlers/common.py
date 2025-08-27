@@ -1,20 +1,32 @@
 # XBalanseBot/app/handlers/common.py
-# v1.5.4 - 2025-08-16
+# v1.5.5
+# 2025-08-26 19:45:00
+"""
+Модуль с общими обработчиками (/start, /help, /cancel, вступление в группу).
+
+Версия 1.5.5:
+- В cmd_start добавлен вызов нового главного меню пользователя.
+- Из cmd_start убран показ списка активностей, так как он доступен из меню.
+- В cmd_help добавлено форматирование имени бота для групповой справки.
+"""
 import logging
-from aiogram import Router, F, Bot
-from aiogram.filters import Command, CommandStart, ChatMemberUpdatedFilter, JOIN_TRANSITION, StateFilter
+from decimal import Decimal, InvalidOperation
+
+from aiogram import Bot, F, Router
+from aiogram.filters import (ChatMemberUpdatedFilter, Command, CommandStart,
+                             StateFilter, JOIN_TRANSITION)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
-from aiogram.types import Message, ChatMemberUpdated, CallbackQuery
-from app.config import (
-    CURRENCY_SYMBOL, MAIN_GROUP_ID, DEFAULT_WELCOME_MESSAGE_BOT, 
-    DEFAULT_WELCOME_MESSAGE_GROUP, DEFAULT_HELP_TEXT_USER, DEFAULT_HELP_TEXT_ADMIN_ADDON,
-    DEFAULT_HELP_TEXT_GROUP
-)
-from app.utils import ensure_user_exists, is_admin, is_user_in_group, format_amount
+from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
+
+from app.config import (CURRENCY_SYMBOL, DEFAULT_HELP_TEXT_ADMIN_ADDON,
+                        DEFAULT_HELP_TEXT_GROUP, DEFAULT_HELP_TEXT_USER,
+                        DEFAULT_WELCOME_MESSAGE_BOT,
+                        DEFAULT_WELCOME_MESSAGE_GROUP, MAIN_GROUP_ID)
 from app.database import db
-from app.keyboards import get_activities_keyboard
-from decimal import Decimal, InvalidOperation
+from app.handlers.user_commands import show_main_menu
+from app.utils import (ensure_user_exists, format_amount, is_admin,
+                       is_user_in_group)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -77,7 +89,6 @@ async def cmd_start(message: Message, state: FSMContext):
 
             if welcome_bonus > 0:
                 async with db.pool.connection() as conn:
-                    # ИСПРАВЛЕНО: Правильный паттерн
                     result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (message.from_user.id,))
                     user_row = await result_cursor.fetchone()
                     if user_row:
@@ -92,11 +103,9 @@ async def cmd_start(message: Message, state: FSMContext):
             logger.error(f"Could not parse welcome_bonus_amount '{bonus_amount_str}': {e}")
             welcome_bonus = Decimal('0')
 
-    welcome_text = await db.get_setting('welcome_message_bot', DEFAULT_WELCOME_MESSAGE_BOT)
+    welcome_text_template = await db.get_setting('welcome_message_bot', DEFAULT_WELCOME_MESSAGE_BOT)
     
-    welcome_text = welcome_text.replace('{username}', message.from_user.mention_html())
-    bot_info = await message.bot.get_me()
-    welcome_text = welcome_text.replace('{bot_username}', f"@{bot_info.username}")
+    welcome_text = welcome_text_template.replace('{username}', message.from_user.mention_html())
     
     if is_new_user and 'welcome_bonus' in locals() and welcome_bonus > 0:
         welcome_text += f"\n\n💰 Вам начислен welcome-бонус: <b>{format_amount(welcome_bonus)} {CURRENCY_SYMBOL}</b>!"
@@ -104,23 +113,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(welcome_text, parse_mode="HTML")
     logger.info(f"Sent welcome message to user {message.from_user.id}")
 
-    all_activities = await db.get_all_activities()
-    general_activity_events = await db.get_events_for_activity(1)
-    activities_to_show = []
-    for act in all_activities:
-        if act['id'] == 1:
-            if general_activity_events:
-                activities_to_show.append(act)
-        else:
-            activities_to_show.append(act)
-    
-    if activities_to_show:
-        user_subscriptions = await db.get_user_subscriptions(message.from_user.id)
-        keyboard = await get_activities_keyboard(activities_to_show, user_subscriptions)
-        await message.answer(
-            "👇 Вы можете выбрать интересующие вас активности для подписки:",
-            reply_markup=keyboard
-        )
+    await show_main_menu(message)
 
 
 @router.message(Command("help", ignore_case=True))
@@ -133,6 +126,8 @@ async def cmd_help(message: Message):
     
     if message.chat.type in ('group', 'supergroup'):
         help_text = DEFAULT_HELP_TEXT_GROUP
+        bot_info = await message.bot.get_me()
+        help_text = help_text.format(bot_username=bot_info.username)
     else:
         help_text = DEFAULT_HELP_TEXT_USER
         if await is_admin(message.from_user.id):
@@ -165,7 +160,6 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
 
             if welcome_bonus > 0:
                 async with db.pool.connection() as conn:
-                    # ИСПРАВЛЕНО: Правильный паттерн
                     result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (new_member.id,))
                     user_row = await result_cursor.fetchone()
                     if user_row:

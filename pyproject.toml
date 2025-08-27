@@ -9,7 +9,7 @@ readme = "README.md"
 packages = [{ include = "app" }]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.13.4"
 aiogram = "^3.8.0"
 apscheduler = "^3.10.4"
 python-dotenv = "^1.0.1"

@@ -1,20 +1,30 @@
+# XBalanseBot/app/states.py
+# v1.1
+# 2025-08-26 16:40:00
 """
 Модуль для определения состояний (FSM) бота.
-Состояния используются для пошагового сбора информации от пользователя.
+
+Версия 1.1:
+- Расширены состояния TransferStates для поддержки нового диалогового режима /send.
 """
 
 from aiogram.fsm.state import State, StatesGroup
 
 class TransferStates(StatesGroup):
     """Состояния для процесса перевода средств."""
+    # Старое состояние для /send @user amount
+    waiting_for_comment_legacy = State() 
+    # Новые состояния для диалога /send
+    waiting_for_recipient = State()
+    waiting_for_amount = State()
     waiting_for_comment = State()
+    waiting_for_confirmation = State()
 
 class AdminEditStates(StatesGroup):
     """Состояния для редактирования административных настроек."""
     waiting_for_welcome_text = State()
     waiting_for_welcome_text_group = State()
     waiting_for_demurrage_rate = State()
-    # ИЗМЕНЕНО: Добавлено состояние для интервала демерреджа
     waiting_for_demurrage_interval = State()
     waiting_for_exchange_rate = State()
     waiting_for_welcome_bonus = State()

@@ -1,5 +1,16 @@
 # XBalanseBot/app/database.py
-# v1.8.0 - 2025-08-20 (Render.com deployment ready)
+# v1.9.2
+# 2025-08-27 16:33:00
+"""
+Модуль для асинхронного управления базой данных PostgreSQL.
+
+Версия 1.9.2:
+- В `init_db` добавлена команда `ALTER TABLE`, чтобы гарантировать наличие
+  колонки `allow_manual_registration` в уже существующей таблице `activities`.
+  Это устраняет ошибку `UndefinedColumn`, замеченную в логах.
+- Запрос в `get_event` теперь получает `allow_manual_registration` из `activities`,
+  чтобы соответствовать логике обработчиков.
+"""
 import logging
 import os
 from datetime import datetime, date, time
@@ -17,12 +28,10 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 # --- НОВЫЙ УНИВЕРСАЛЬНЫЙ БЛОК ДЛЯ ПОДКЛЮЧЕНИЯ К БД ---
-# Проверяем, есть ли переменная DATABASE_URL (стандарт для Render.com)
 if database_url := os.environ.get("DATABASE_URL"):
     CONNINFO = database_url
     logger.info("Using DATABASE_URL for database connection.")
 else:
-    # Если нет, собираем строку подключения из отдельных переменных (для локальной разработки)
     logger.info("Using individual POSTGRES variables for database connection.")
     CONNINFO = (
         f"host={POSTGRES_HOST} port={POSTGRES_PORT} dbname={POSTGRES_DB} "
@@ -74,9 +83,13 @@ class Database:
                         description TEXT,
                         end_date DATE,
                         is_active BOOLEAN DEFAULT TRUE,
+                        allow_manual_registration BOOLEAN DEFAULT FALSE,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
+                # ИСПРАВЛЕНИЕ: Добавляем колонку, если она отсутствует, для обратной совместимости
+                await cur.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS allow_manual_registration BOOLEAN DEFAULT FALSE;")
+
                 await cur.execute("""
                     CREATE TABLE IF NOT EXISTS events (
                         id SERIAL PRIMARY KEY,
@@ -126,6 +139,19 @@ class Database:
                         value TEXT NOT NULL
                     )
                 """)
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS event_registration_overrides (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        event_id INTEGER NOT NULL,
+                        override_date DATE NOT NULL,
+                        status TEXT NOT NULL CHECK(status IN ('registered', 'unregistered')),
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (user_id, event_id, override_date),
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+                    )
+                """)
 
                 # Системные записи
                 await cur.execute("""
@@ -136,35 +162,12 @@ class Database:
                 await cur.execute("""
                     INSERT INTO activities (id, name, description, is_active)
                     VALUES (1, 'Общие события', '', TRUE)
-                    ON CONFLICT (id) DO NOTHING
+                    ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_active = EXCLUDED.is_active
                 """)
 
-                # Синхронизация sequences с учётом системных записей
-                await cur.execute("""
-                    DO $$
-                    DECLARE m integer;
-                    BEGIN
-                        SELECT MAX(id) INTO m FROM users;
-                        IF m IS NULL OR m = 0 THEN
-                            PERFORM setval('users_id_seq', 1, false); -- следующий nextval() = 1
-                        ELSE
-                            PERFORM setval('users_id_seq', m, true);  -- следующий nextval() = m+1
-                        END IF;
-                    END$$;
-                """)
-
-                await cur.execute("""
-                    DO $$
-                    DECLARE m integer;
-                    BEGIN
-                        SELECT MAX(id) INTO m FROM activities;
-                        IF m IS NULL THEN
-                            PERFORM setval('activities_id_seq', 1, false);
-                        ELSE
-                            PERFORM setval('activities_id_seq', m, true);  -- обычно m=1 -> следующий 2
-                        END IF;
-                    END$$;
-                """)
+                # Синхронизация sequences
+                await cur.execute("SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1))")
+                await cur.execute("SELECT setval('activities_id_seq', COALESCE((SELECT MAX(id) FROM activities), 1))")
 
                 default_settings = {
                     'demurrage_rate': '0.01', 'demurrage_enabled': '0', 'exchange_rate': '1.0',
@@ -175,7 +178,7 @@ class Database:
                     'demurrage_interval_days': '1',
                     'demurrage_last_run': '1970-01-01'
                 }
-                
+
                 for key, value in default_settings.items():
                     await cur.execute(
                         "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
@@ -297,7 +300,7 @@ class Database:
                 result = await cur.fetchone()
                 return result[0] if result else 0
 
-    async def update_activity(self, activity_id: int, name: str = None, description: str = None, end_date: date = None):
+    async def update_activity(self, activity_id: int, name: str = None, description: str = None, end_date: date = None, allow_manual_registration: bool = None):
         async with self.pool.connection() as conn:
             if name is not None:
                 await conn.execute("UPDATE activities SET name = %s WHERE id = %s", (name, activity_id))
@@ -305,6 +308,8 @@ class Database:
                 await conn.execute("UPDATE activities SET description = %s WHERE id = %s", (description, activity_id))
             if end_date is not None or (isinstance(end_date, type(None))):
                 await conn.execute("UPDATE activities SET end_date = %s WHERE id = %s", (end_date, activity_id))
+            if allow_manual_registration is not None:
+                await conn.execute("UPDATE activities SET allow_manual_registration = %s WHERE id = %s", (allow_manual_registration, activity_id))
 
     async def delete_activity(self, activity_id: int):
         async with self.pool.connection() as conn:
@@ -314,8 +319,8 @@ class Database:
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("""
-                    SELECT e.*, a.name as activity_name, a.description as activity_description 
-                    FROM events e JOIN activities a ON e.activity_id = a.id 
+                    SELECT e.*, a.name as activity_name, a.description as activity_description
+                    FROM events e JOIN activities a ON e.activity_id = a.id
                     WHERE e.is_active = TRUE
                 """)
                 return await cur.fetchall()
@@ -324,8 +329,8 @@ class Database:
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("""
-                    SELECT e.*, a.name as activity_name, a.description as activity_description 
-                    FROM events e JOIN activities a ON e.activity_id = a.id 
+                    SELECT e.*, a.name as activity_name, a.description as activity_description, a.allow_manual_registration
+                    FROM events e JOIN activities a ON e.activity_id = a.id
                     WHERE e.id = %s
                 """, (event_id,))
                 return await cur.fetchone()
@@ -364,5 +369,56 @@ class Database:
     async def delete_event(self, event_id: int):
         async with self.pool.connection() as conn:
             await conn.execute("DELETE FROM events WHERE id = %s", (event_id,))
+
+    async def get_activity_subscribers(self, activity_id: int) -> List[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT u.* FROM users u JOIN user_subscriptions us ON u.id = us.user_id WHERE us.activity_id = %s",
+                    (activity_id,)
+                )
+                return await cur.fetchall()
+
+    async def get_event_overrides_for_date(self, event_id: int, override_date: date) -> List[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT * FROM event_registration_overrides WHERE event_id = %s AND override_date = %s",
+                    (event_id, override_date)
+                )
+                return await cur.fetchall()
+
+    async def get_user_event_override(self, telegram_id: int, event_id: int, override_date: date) -> Optional[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                user = await self.get_user(telegram_id=telegram_id)
+                if not user: return None
+                await cur.execute(
+                    "SELECT * FROM event_registration_overrides WHERE user_id = %s AND event_id = %s AND override_date = %s",
+                    (user['id'], event_id, override_date)
+                )
+                return await cur.fetchone()
+
+    async def set_event_override(self, telegram_id: int, event_id: int, override_date: date, status: str):
+        async with self.pool.connection() as conn:
+            user = await self.get_user(telegram_id=telegram_id)
+            if not user: return
+            await conn.execute(
+                """
+                INSERT INTO event_registration_overrides (user_id, event_id, override_date, status)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, event_id, override_date) DO UPDATE SET status = EXCLUDED.status
+                """,
+                (user['id'], event_id, override_date, status)
+            )
+
+    async def remove_event_override(self, telegram_id: int, event_id: int, override_date: date):
+        async with self.pool.connection() as conn:
+            user = await self.get_user(telegram_id=telegram_id)
+            if not user: return
+            await conn.execute(
+                "DELETE FROM event_registration_overrides WHERE user_id = %s AND event_id = %s AND override_date = %s",
+                (user['id'], event_id, override_date)
+            )
 
 db = Database(CONNINFO)

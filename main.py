@@ -1,30 +1,14 @@
 # XBalanseBot/main.py
-# v1.8.5 - 2025-08-20 (Switched to Web Cron model)
-# 2025-08-20 19:30:00
+# v1.8.8
+# 2025-08-27 16:33:00
 """
 Main entry point of XBalanseBot.
 
-Functions and responsibilities:
-- Loads environment variables for local development.
-- Ensures stable module import paths in heterogeneous runtimes (Render.com).
-- Initializes logging, database connection pool, routers, and scheduler.
-- Runs the bot in polling mode (DEV) or webhook mode (PROD).
-
-External dependencies:
-- aiogram (Telegram Bot framework)
-- apscheduler (task scheduler)
-- python-dotenv (environment variables)
-- aiohttp (used by webhook server)
-- psycopg/psycopg_pool (via app.database)
-- Local modules: config, app.database, app.handlers.*, app.services.*
-
-Recent changes (changelog):
-- v1.8.5: REFACTOR - Switched to a "Web Cron" model. The internal apscheduler now handles all jobs
-           again. An external Render Cron Job acts as a "waker" by hitting a secret endpoint,
-           preventing the free instance from sleeping. This simplifies future migration to paid plans.
-- v1.8.4: REFACTOR — Removed demurrage scheduling from the main application's apscheduler.
-- v1.8.3: FIX — Moved WEBHOOK_HOST retrieval from config import to main() runtime.
-- v1.8.2: FIX — Added explicit sys.path injection for the current directory.
+Версия 1.8.8:
+- ИСПРАВЛЕНИЕ: Исправлена ошибка `AttributeError` при завершении работы бота.
+  Вызов `db.pool.is_closed()` заменен на свойство `db.pool.closed`.
+- ИСПРАВЛЕНИЕ: Исправлена опечатка `db.pool.is_closed()` на `db.pool.closed` для
+  корректного завершения работы.
 """
 
 import asyncio
@@ -108,15 +92,9 @@ async def setup_super_admin():
 
 
 async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
-    """
-    Configure the background scheduler.
-    On free Render plan, it relies on an external Cron Job to "wake it up"
-    to ensure scheduled jobs are processed.
-    """
-    # Schedule daily demurrage at 00:01 MSK.
+    """Configure the background scheduler."""
     scheduler.add_job(scheduler_jobs.process_demurrage, CronTrigger(hour=0, minute=1), args=(bot,))
 
-    # Schedule event jobs (payments + reminders)
     all_events = await db.get_all_events()
     for event in all_events:
         await scheduler_jobs.schedule_event_jobs(event, bot, scheduler)
@@ -142,8 +120,8 @@ async def main():
     dp.callback_query.outer_middleware(logging_middleware)
     dp.chat_member.outer_middleware(logging_middleware)
 
-    dp.include_router(common.router)
     dp.include_router(admin_commands.router)
+    dp.include_router(common.router)
     dp.include_router(user_commands.router)
     dp.include_router(activity_handlers.router)
     dp.include_router(event_handlers.router)
@@ -173,10 +151,10 @@ async def main():
         if scheduler.running:
             scheduler.shutdown()
             logger.info("Scheduler stopped.")
-        
-        if db.pool and not db.pool.is_closed():
+
+        if db.pool and not db.pool.closed:
             await db.close()
-        
+
         await bot.session.close()
         logger.info("Bot session and database pool closed.")
 

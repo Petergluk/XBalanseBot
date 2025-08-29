@@ -1,8 +1,15 @@
 # XBalanseBot/app/handlers/user_commands.py
-# v1.7.2
-# 2025-08-27 02:40:00
+# XBalanseBot/app/handlers/user_commands.py
+# FULL FILE EMITTED: YES
+# v1.7.3
+# 2025-08-29 04:15:00
 """
 Модуль с обработчиками команд, доступных обычным пользователям.
+
+Версия 1.7.3:
+- Полностью переведена логика обработки callback_data на использование фабрик
+  из `app.callbacks`, что повышает надежность и читаемость кода.
+- Удалены устаревшие методы парсинга callback_data на основе строк.
 
 Версия 1.7.2:
 - ИСПРАВЛЕНИЕ: `process_menu_activity` теперь корректно вызывает новую
@@ -27,6 +34,7 @@ from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
                        get_user_balance, is_user_in_group)
+from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -108,11 +116,11 @@ async def cmd_menu(message: Message):
         return
     await show_main_menu(message)
 
-@router.callback_query(F.data == "main_menu")
+@router.callback_query(GeneralAction.filter(F.action == "main_menu"))
 async def process_back_to_menu(callback: CallbackQuery):
     await show_main_menu(callback)
 
-@router.callback_query(F.data == "menu_balance")
+@router.callback_query(GeneralAction.filter(F.action == "menu_balance"))
 async def process_menu_balance(callback: CallbackQuery):
     await ensure_user_exists(callback.from_user.id, callback.from_user.username, callback.from_user.is_bot)
     balance = await get_user_balance(callback.from_user.id)
@@ -127,7 +135,7 @@ async def process_menu_balance(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(F.data == "menu_history")
+@router.callback_query(GeneralAction.filter(F.action == "menu_history"))
 async def process_menu_history(callback: CallbackQuery):
     await callback.answer()
     await callback.message.delete()
@@ -142,24 +150,24 @@ async def process_menu_history(callback: CallbackQuery):
         parse_mode="HTML"
     )
 
-@router.callback_query(F.data == "menu_activity")
+@router.callback_query(GeneralAction.filter(F.action == "menu_activity"))
 async def process_menu_activity(callback: CallbackQuery):
     """Обрабатывает кнопку 'Активности', вызывая новую универсальную функцию."""
     await activity_handlers.show_activities_list(callback)
 
-@router.callback_query(F.data == "menu_event")
+@router.callback_query(GeneralAction.filter(F.action == "menu_event"))
 async def process_menu_event(callback: CallbackQuery):
     await callback.answer()
     await callback.message.delete()
     await event_handlers.cmd_event(callback.message)
 
-@router.callback_query(F.data == "menu_help")
+@router.callback_query(GeneralAction.filter(F.action == "menu_help"))
 async def process_menu_help(callback: CallbackQuery):
     await callback.answer()
     await callback.message.delete()
     await common_handlers.cmd_help(callback.message)
 
-@router.callback_query(F.data == "menu_send")
+@router.callback_query(GeneralAction.filter(F.action == "menu_send"))
 async def process_menu_send(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(TransferStates.waiting_for_recipient)
@@ -288,7 +296,7 @@ async def process_comment_input(message: Message, state: FSMContext):
     message_ids.append(sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
-@router.callback_query(TransferStates.waiting_for_confirmation, F.data == "transfer_confirm")
+@router.callback_query(TransferStates.waiting_for_confirmation, TransferAction.filter(F.action == "confirm"))
 async def process_transfer_confirmation(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
     recipient = {
@@ -302,7 +310,7 @@ async def process_transfer_confirmation(callback: CallbackQuery, state: FSMConte
     await perform_transfer_and_notify(callback, state, bot, recipient, amount, comment, is_dialog=True)
     await callback.answer()
 
-@router.callback_query(TransferStates.waiting_for_confirmation, F.data == "transfer_cancel")
+@router.callback_query(TransferStates.waiting_for_confirmation, TransferAction.filter(F.action == "cancel"))
 async def process_transfer_cancel(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await cleanup_transfer_dialog(state, bot, callback.message.chat.id)
     await callback.message.answer("Перевод отменен.")

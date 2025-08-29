@@ -1,8 +1,15 @@
 # XBalanseBot/app/handlers/common.py
-# v1.5.5
-# 2025-08-26 19:45:00
+# XBalanseBot/app/handlers/common.py
+# FULL FILE EMITTED: YES
+# v1.5.6
+# 2025-08-29 04:15:00
 """
 Модуль с общими обработчиками (/start, /help, /cancel, вступление в группу).
+
+Версия 1.5.6:
+- Полностью переведена логика обработки callback_data на использование фабрик
+  из `app.callbacks`, что повышает надежность и читаемость кода.
+- Удалены устаревшие методы парсинга callback_data на основе строк.
 
 Версия 1.5.5:
 - В cmd_start добавлен вызов нового главного меню пользователя.
@@ -27,6 +34,7 @@ from app.database import db
 from app.handlers.user_commands import show_main_menu
 from app.utils import (ensure_user_exists, format_amount, is_admin,
                        is_user_in_group)
+from app.callbacks import GeneralAction
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -40,14 +48,32 @@ async def cmd_cancel(message: Message, state: FSMContext):
         return
 
     logger.info(f"User {message.from_user.id} cancelled state {current_state}")
+    # Попытаемся удалить сообщения, если они были сохранены в FSM
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    if message_ids:
+        try:
+            await message.bot.delete_messages(chat_id=message.chat.id, message_ids=message_ids)
+        except Exception as e:
+            logger.warning(f"Could not delete messages in cancel dialog: {e}")
+    
     await state.clear()
     await message.answer("Действие отменено. Вы вышли из диалога.")
 
-@router.callback_query(F.data == "cancel_delete", StateFilter(any_state))
+@router.callback_query(GeneralAction.filter(F.action == "cancel_dialog"), StateFilter(any_state))
 async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
     """
     Обрабатывает нажатие кнопки 'Отмена' в любом диалоге подтверждения.
     """
+    # Также очищаем сообщения, если были
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    if message_ids:
+        try:
+            await callback.bot.delete_messages(chat_id=callback.message.chat.id, message_ids=message_ids)
+        except Exception as e:
+            logger.warning(f"Could not delete messages in cancel_dialog callback: {e}")
+
     await state.clear()
     await callback.message.edit_text("Действие отменено.")
     await callback.answer()

@@ -1,5 +1,16 @@
 # XBalanseBot/app/utils.py
-# v1.5.6 - 2025-08-17 (fix recurring same-day logic: return today if time hasn't passed)
+# FULL FILE EMITTED: YES
+# v1.5.7
+# 2025-08-28 13:24:00
+"""
+Модуль с утилитами и вспомогательными функциями.
+
+Версия 1.5.7:
+- ИСПРАВЛЕНИЕ: В `get_next_run_time` изменена логика сравнения времени.
+  - Для разовых событий `>` заменено на `>=` для корректной обработки событий, наступающих в текущую минуту.
+  - Для повторяющихся событий `now.time() >= event_time` заменено на `now.time() > event_time`, чтобы событие, назначенное на текущее время, считалось сегодняшним, а не переносилось на неделю.
+  - Это исправляет баг, из-за которого планировщик не мог обработать наступившее событие и оно считалось прошедшим.
+"""
 import logging
 from datetime import datetime, timedelta, time
 from decimal import Decimal
@@ -151,19 +162,12 @@ def get_next_run_time(
     """
     Вычисляет следующую дату и время для события на основе его типа и расписания.
     Всегда возвращает aware datetime в Europe/Moscow.
-
-    Правила:
-    - single: если дата в будущем — вернуть её, иначе None.
-    - recurring:
-        * если нужный день в будущем — ближайший такой день;
-        * если сегодня:
-            - если текущее время < event_time — сегодня;
-            - иначе — через 7 дней.
     """
     now = datetime.now(MOSCOW_TZ)
 
     if event_type == 'single':
-        if event_date and event_date > now:
+        # ИСПРАВЛЕНИЕ: >= вместо >, чтобы включать события, наступающие прямо сейчас.
+        if event_date and event_date >= now:
             return event_date
         return None
 
@@ -174,8 +178,9 @@ def get_next_run_time(
         if days_ahead < 0:
             days_ahead += 7
         elif days_ahead == 0:
-            # Сегодня нужный день: если текущее время уже прошло — переносим на следующую неделю
-            if now.time() >= event_time:
+            # ИСПРАВЛЕНИЕ: > вместо >=. Если время еще не прошло, событие должно быть сегодня.
+            # Если время уже наступило или прошло, переносим на следующую неделю.
+            if now.time() > event_time:
                 days_ahead = 7
 
         target_date = now.date() + timedelta(days=days_ahead)

@@ -1,8 +1,12 @@
 # XBalanseBot/main.py
-# v1.8.8
-# 2025-08-27 16:33:00
+# XBalanseBot/main.py
+# v1.8.9
+# 2025-08-29 04:15:00
 """
 Main entry point of XBalanseBot.
+
+Версия 1.8.9:
+- Добавлен импорт нового модуля `app.callbacks`.
 
 Версия 1.8.8:
 - ИСПРАВЛЕНИЕ: Исправлена ошибка `AttributeError` при завершении работы бота.
@@ -43,6 +47,7 @@ from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers
 from app.services import scheduler_jobs
 from app.services.webhook_handler import run_webhook_server
+from app import callbacks # Импорт нового модуля callbacks
 
 # --- Logging setup ---
 log_dir = "data/logs"

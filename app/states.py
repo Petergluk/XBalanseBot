@@ -1,20 +1,24 @@
 # XBalanseBot/app/states.py
-# v1.1
-# 2025-08-26 16:40:00
+# FULL FILE EMITTED: YES
+# v1.4.0
+# 2025-08-29 00:49:00
 """
 Модуль для определения состояний (FSM) бота.
 
-Версия 1.1:
-- Расширены состояния TransferStates для поддержки нового диалогового режима /send.
+Версия 1.4.0:
+- **НОВОЕ**: В `EventCreationStates` добавлено состояние `waiting_for_confirmation`
+  для реализации предпросмотра события перед его сохранением.
+- В Docstrings добавлено упоминание поля `message_ids`, которое теперь
+  хранится в data для очистки диалогов.
 """
 
 from aiogram.fsm.state import State, StatesGroup
 
 class TransferStates(StatesGroup):
-    """Состояния для процесса перевода средств."""
-    # Старое состояние для /send @user amount
-    waiting_for_comment_legacy = State() 
-    # Новые состояния для диалога /send
+    """
+    Состояния для процесса перевода средств.
+    data: `message_ids`, `recipient_id`, `amount`, `comment`, etc.
+    """
     waiting_for_recipient = State()
     waiting_for_amount = State()
     waiting_for_comment = State()
@@ -35,19 +39,28 @@ class FundPaymentStates(StatesGroup):
     waiting_for_amount_and_comment = State()
 
 class ActivityCreationStates(StatesGroup):
-    """Состояния для процесса создания новой активности."""
+    """
+    Состояния для процесса создания новой активности.
+    data: `message_ids`, `name`, `description`, `end_date`
+    """
     waiting_for_name = State()
     waiting_for_description = State()
     waiting_for_end_date = State()
 
 class ActivityEditStates(StatesGroup):
-    """Состояния для процесса редактирования существующей активности."""
+    """
+    Состояния для процесса редактирования существующей активности.
+    data: `message_ids`, `activity_id`
+    """
     waiting_for_new_name = State()
     waiting_for_new_description = State()
     waiting_for_new_end_date = State()
 
 class EventCreationStates(StatesGroup):
-    """Состояния для процесса создания нового события."""
+    """
+    Состояния для процесса создания нового события.
+    data: `message_ids`, `activity_id`, `name`, `description`, etc.
+    """
     waiting_for_activity = State()
     waiting_for_event_name = State()
     waiting_for_event_description = State()
@@ -59,9 +72,13 @@ class EventCreationStates(StatesGroup):
     waiting_for_link = State()
     waiting_for_reminder_time = State()
     waiting_for_reminder_text = State()
+    waiting_for_confirmation = State() # Новое состояние для предпросмотра
 
 class EventEditStates(StatesGroup):
-    """Состояния для процесса редактирования существующего события."""
+    """
+    Состояния для процесса редактирования существующего события.
+    data: `message_ids`, `event_id`, `activity_id`
+    """
     waiting_for_field_choice = State()
     waiting_for_new_name = State()
     waiting_for_new_description = State()

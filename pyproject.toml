@@ -16,6 +16,9 @@ python-dotenv = "^1.0.1"
 aiohttp = "^3.9.5"
 psycopg = {extras = ["binary", "pool"], version = "^3.1.18"}
 pydantic = "<2.9,>=2.4.1"
+alembic = "^1.13.1"
+redis = "^5.0.4"
+
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"

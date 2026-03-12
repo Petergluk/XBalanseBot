@@ -1,5 +1,4 @@
 # XBalanseBot/app/handlers/common.py
-# XBalanseBot/app/handlers/common.py
 # FULL FILE EMITTED: YES
 # v1.5.6
 # 2025-08-29 04:15:00
@@ -26,10 +25,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
 
-from app.config import (CURRENCY_SYMBOL, DEFAULT_HELP_TEXT_ADMIN_ADDON,
-                        DEFAULT_HELP_TEXT_GROUP, DEFAULT_HELP_TEXT_USER,
-                        DEFAULT_WELCOME_MESSAGE_BOT,
-                        DEFAULT_WELCOME_MESSAGE_GROUP, MAIN_GROUP_ID)
+from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
+from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers.user_commands import show_main_menu
 from app.utils import (ensure_user_exists, format_amount, is_admin,
@@ -39,12 +36,18 @@ from app.callbacks import GeneralAction
 router = Router()
 logger = logging.getLogger(__name__)
 
+
+async def _credit_welcome_bonus(telegram_id: int, comment: str):
+    """Обёртка для db.credit_welcome_bonus, возвращающая Decimal."""
+    return await db.credit_welcome_bonus(telegram_id, comment)
+
 @router.message(Command("cancel", ignore_case=True), StateFilter(any_state))
 async def cmd_cancel(message: Message, state: FSMContext):
     """Обработчик команды /cancel для выхода из любого диалога."""
     current_state = await state.get_state()
     if current_state is None:
-        await message.answer("Нет активного диалога для отмены.")
+        from app.handlers.user_commands import show_main_menu
+        await show_main_menu(message)
         return
 
     logger.info(f"User {message.from_user.id} cancelled state {current_state}")
@@ -58,7 +61,10 @@ async def cmd_cancel(message: Message, state: FSMContext):
             logger.warning(f"Could not delete messages in cancel dialog: {e}")
     
     await state.clear()
-    await message.answer("Действие отменено. Вы вышли из диалога.")
+    await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+    # Показываем главное меню, чтобы пользователь не остался без кнопок
+    from app.handlers.user_commands import show_main_menu
+    await show_main_menu(message)
 
 @router.callback_query(GeneralAction.filter(F.action == "cancel_dialog"), StateFilter(any_state))
 async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
@@ -75,7 +81,8 @@ async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
             logger.warning(f"Could not delete messages in cancel_dialog callback: {e}")
 
     await state.clear()
-    await callback.message.edit_text("Действие отменено.")
+    from app.keyboards import get_back_to_menu_keyboard
+    await callback.message.edit_text(LEXICON_RU["msg_action_cancelled"], reply_markup=get_back_to_menu_keyboard())
     await callback.answer()
 
 
@@ -90,56 +97,70 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     logger.info(f"User {message.from_user.id} (@{message.from_user.username}) started bot")
     
-    if not await is_user_in_group(message.bot, message.from_user.id):
-        admins = await db.get_all_admins()
-        admin_contact = "администратору"
-        if admins:
-            first_admin = await db.get_user(telegram_id=admins[0]['telegram_id'])
-            if first_admin and first_admin['username']:
-                admin_contact = f"@{first_admin['username']}"
-        
-        logger.warning(f"User {message.from_user.id} tried to start bot but not in group")
-        await message.answer(
-            f"❌ Вы не состоите в основной группе сообщества.\n\n"
-            f"Для получения доступа к боту обратитесь к {admin_contact}."
-        )
+    is_in_group = await is_user_in_group(message.bot, message.from_user.id)
+    await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
+    
+    # Гарантируем права суперадмина при каждом /start
+    from app.config import SUPER_ADMIN_ID
+    if message.from_user.id == SUPER_ADMIN_ID:
+        user = await db.get_user(telegram_id=SUPER_ADMIN_ID)
+        if user and not user['is_admin']:
+            await db.set_admin_status(SUPER_ADMIN_ID, True)
+            logger.info(f"Super admin {SUPER_ADMIN_ID} re-promoted via /start")
+    
+    if is_in_group:
+        stats = await db.get_returning_user_stats(message.from_user.id)
+        if stats and (stats['sent'] > 0 or stats['received'] > 0 or stats['deducted'] > 0):
+            # Returning active user — show full stats greeting
+            text = LEXICON_RU["msg_welcome_back"].format(
+                mention=message.from_user.mention_html(),
+                balance=format_amount(stats['balance']),
+                currency_symbol=CURRENCY_SYMBOL,
+                sent=format_amount(stats['sent']),
+                received=format_amount(stats['received']),
+                deducted=format_amount(stats['deducted'])
+            )
+            from app.keyboards import get_back_to_menu_keyboard
+            await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+        else:
+            # Already in DB but no transactions yet — playful short greeting, then menu
+            text = LEXICON_RU["msg_welcome_back_simple"].format(
+                mention=message.from_user.mention_html()
+            )
+            from app.keyboards import get_back_to_menu_keyboard
+            await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
         return
-    
-    is_new_user = await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
-    
-    if is_new_user:
-        bonus_amount_str = await db.get_setting('welcome_bonus_amount', '0')
-        try:
-            welcome_bonus = Decimal(bonus_amount_str)
-            logger.info(f"Calculated welcome_bonus for user {message.from_user.id}: {welcome_bonus} from string '{bonus_amount_str}'")
-
-            if welcome_bonus > 0:
-                async with db.pool.connection() as conn:
-                    result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (message.from_user.id,))
-                    user_row = await result_cursor.fetchone()
-                    if user_row:
-                        user_id = user_row[0]
-                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (welcome_bonus, user_id))
-                        await conn.execute(
-                            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'welcome_bonus', %s)",
-                            (user_id, welcome_bonus, "Welcome-бонус для нового участника")
-                        )
-                        logger.info(f"Welcome bonus {welcome_bonus} credited to user {message.from_user.id}")
-        except (ValueError, TypeError, InvalidOperation) as e:
-            logger.error(f"Could not parse welcome_bonus_amount '{bonus_amount_str}': {e}")
-            welcome_bonus = Decimal('0')
-
-    welcome_text_template = await db.get_setting('welcome_message_bot', DEFAULT_WELCOME_MESSAGE_BOT)
-    
+        
+    # Пользователь не в группе -> Начинаем онбординг
+    welcome_text_template = await db.get_setting('welcome_message_bot', LEXICON_RU["default_welcome_bot"])
     welcome_text = welcome_text_template.replace('{username}', message.from_user.mention_html())
     
-    if is_new_user and 'welcome_bonus' in locals() and welcome_bonus > 0:
-        welcome_text += f"\n\n💰 Вам начислен welcome-бонус: <b>{format_amount(welcome_bonus)} {CURRENCY_SYMBOL}</b>!"
-    
-    await message.answer(welcome_text, parse_mode="HTML")
-    logger.info(f"Sent welcome message to user {message.from_user.id}")
+    from app.keyboards import get_onboarding_keyboard
+    await message.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
+    logger.info(f"Sent onboarding message to user {message.from_user.id}")
 
-    await show_main_menu(message)
+@router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
+async def process_onboarding_agree(callback: CallbackQuery):
+    """Обработка нажатия кнопки 'Согласен'."""
+    await callback.answer()
+    try:
+        from app.config import MAIN_GROUP_ID
+        invite_link = await callback.bot.create_chat_invite_link(
+            chat_id=MAIN_GROUP_ID, 
+            member_limit=1,
+            name=f"Invite for {callback.from_user.full_name}"
+        )
+        await callback.message.edit_text(
+            LEXICON_RU["msg_invite_link"].format(invite_link=invite_link.invite_link),
+            reply_markup=None,
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.error(f"Failed to create invite link: {e}")
+        await callback.message.edit_text(
+            LEXICON_RU["err_invite_link"],
+            reply_markup=None
+        )
 
 
 @router.message(Command("help", ignore_case=True))
@@ -151,13 +172,13 @@ async def cmd_help(message: Message):
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     
     if message.chat.type in ('group', 'supergroup'):
-        help_text = DEFAULT_HELP_TEXT_GROUP
+        help_text = LEXICON_RU["help_group"]
         bot_info = await message.bot.get_me()
-        help_text = help_text.format(bot_username=bot_info.username)
+        help_text = help_text.format(bot_username=bot_info.username, currency_symbol=CURRENCY_SYMBOL)
     else:
-        help_text = DEFAULT_HELP_TEXT_USER
+        help_text = LEXICON_RU["help_user"].format(currency_symbol=CURRENCY_SYMBOL)
         if await is_admin(message.from_user.id):
-            help_text += DEFAULT_HELP_TEXT_ADMIN_ADDON
+            help_text += LEXICON_RU["help_admin_addon"]
     
     await message.answer(help_text, parse_mode="HTML")
 
@@ -179,45 +200,39 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
     is_new_user = await ensure_user_exists(new_member.id, new_member.username, new_member.is_bot)
     
     if is_new_user:
-        bonus_amount_str = await db.get_setting('welcome_bonus_amount', '0')
+        await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")
+        bonus_amount = await db.get_setting('welcome_bonus_amount', '1500')
+        bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
+        
+        bonus_text = bonus_text_template.format(
+            amount=bonus_amount,
+            currency_symbol=CURRENCY_SYMBOL,
+            username=new_member.full_name or new_member.first_name
+        )
+        
         try:
-            welcome_bonus = Decimal(bonus_amount_str)
-            logger.info(f"Calculated welcome_bonus for new member {new_member.id}: {welcome_bonus} from string '{bonus_amount_str}'")
+            from app.keyboards import get_back_to_menu_keyboard
+            await bot.send_message(
+                new_member.id,
+                bonus_text,
+                reply_markup=get_back_to_menu_keyboard(),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Could not send welcome DM to {new_member.id}: {e}")
 
-            if welcome_bonus > 0:
-                async with db.pool.connection() as conn:
-                    result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (new_member.id,))
-                    user_row = await result_cursor.fetchone()
-                    if user_row:
-                        user_id = user_row[0]
-                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (welcome_bonus, user_id))
-                        await conn.execute(
-                            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'welcome_bonus', %s)",
-                            (user_id, welcome_bonus, "Welcome-бонус за вступление в группу")
-                        )
-                        logger.info(f"Welcome bonus {welcome_bonus} credited to new member {new_member.id}")
-        except (ValueError, TypeError, InvalidOperation) as e:
-            logger.error(f"Could not parse welcome_bonus_amount for new member '{bonus_amount_str}': {e}")
-            welcome_bonus = Decimal('0')
-
-    welcome_text = await db.get_setting('welcome_message_group', DEFAULT_WELCOME_MESSAGE_GROUP)
-    
-    try:
+    # Проверяем, нужно ли отправлять приветствие в саму группу
+    if await db.get_setting('welcome_group_enabled', '0') == '1':
+        welcome_text_template = await db.get_setting('welcome_message_group', LEXICON_RU["default_welcome_group"])
         bot_info = await bot.get_me()
-        formatted_text = welcome_text.replace('{username}', new_member.mention_html())
-        formatted_text = formatted_text.replace('{bot_username}', f"@{bot_info.username}")
-        
-        if is_new_user and 'welcome_bonus' in locals() and welcome_bonus > 0:
-            formatted_text += f"\n\n💰 Вам начислен welcome-бонус: <b>{format_amount(welcome_bonus)} {CURRENCY_SYMBOL}</b>!"
-        
-        await bot.send_message(MAIN_GROUP_ID, formatted_text, parse_mode="HTML")
-        logger.info(f"Sent group welcome message for user {new_member.id}")
-    except Exception as e:
-        logger.error(f"Failed to send welcome message for user {new_member.id}: {e}", exc_info=True)
+        welcome_text = welcome_text_template.format(username=new_member.mention_html(), bot_username=bot_info.username)
+        await bot.send_message(event.chat.id, welcome_text, parse_mode="HTML")
+    else:
+        logger.info(f"Processed join for user {new_member.id} silently (group welcome disabled).")
 
 @router.callback_query(F.data == "already_subscribed")
 async def process_already_subscribed(callback: CallbackQuery):
     """
     Обрабатывает нажатие на кнопку активности, на которую пользователь уже подписан.
     """
-    await callback.answer("Вы уже подписаны на эту активность.", show_alert=False)
+    await callback.answer(LEXICON_RU["msg_already_subscribed"], show_alert=False)

@@ -21,9 +21,9 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.config import (
-    POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD,
-    DEFAULT_WELCOME_MESSAGE_BOT, DEFAULT_WELCOME_MESSAGE_GROUP, DEFAULT_REMINDER_TEXT
+    POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
 )
+from app.lexicon import LEXICON_RU
 
 logger = logging.getLogger(__name__)
 
@@ -61,98 +61,9 @@ class Database:
             logger.info("Database connection pool closed.")
 
     async def init_db(self):
-        """Инициализирует структуру базы данных (таблицы) и начальные записи."""
+        """Инициализирует начальные записи (таблицы теперь управляются Alembic)."""
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id SERIAL PRIMARY KEY,
-                        telegram_id BIGINT UNIQUE NOT NULL,
-                        username TEXT,
-                        balance NUMERIC(18, 4) DEFAULT 0,
-                        is_admin BOOLEAN DEFAULT FALSE,
-                        transaction_count INTEGER DEFAULT 0,
-                        grace_credit_used BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS activities (
-                        id SERIAL PRIMARY KEY,
-                        name TEXT UNIQUE NOT NULL,
-                        description TEXT,
-                        end_date DATE,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        allow_manual_registration BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                # ИСПРАВЛЕНИЕ: Добавляем колонку, если она отсутствует, для обратной совместимости
-                await cur.execute("ALTER TABLE activities ADD COLUMN IF NOT EXISTS allow_manual_registration BOOLEAN DEFAULT FALSE;")
-
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS events (
-                        id SERIAL PRIMARY KEY,
-                        activity_id INTEGER NOT NULL,
-                        name TEXT,
-                        description TEXT,
-                        event_type TEXT NOT NULL CHECK(event_type IN ('recurring', 'single')),
-                        event_date TIMESTAMP WITH TIME ZONE,
-                        weekday INTEGER,
-                        event_time TIME,
-                        cost NUMERIC(18, 4) NOT NULL,
-                        link TEXT,
-                        reminder_time INTEGER,
-                        reminder_text TEXT,
-                        created_by BIGINT,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        last_run TIMESTAMP WITH TIME ZONE,
-                        FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE
-                    )
-                """)
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS user_subscriptions (
-                        user_id INTEGER NOT NULL,
-                        activity_id INTEGER NOT NULL,
-                        subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (user_id, activity_id),
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE
-                    )
-                """)
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS transactions (
-                        id SERIAL PRIMARY KEY,
-                        from_user_id INTEGER,
-                        to_user_id INTEGER,
-                        amount NUMERIC(18, 4) NOT NULL,
-                        type TEXT NOT NULL,
-                        comment TEXT,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (from_user_id) REFERENCES users(id),
-                        FOREIGN KEY (to_user_id) REFERENCES users(id)
-                    )
-                """)
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS settings (
-                        key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL
-                    )
-                """)
-                await cur.execute("""
-                    CREATE TABLE IF NOT EXISTS event_registration_overrides (
-                        id SERIAL PRIMARY KEY,
-                        user_id INTEGER NOT NULL,
-                        event_id INTEGER NOT NULL,
-                        override_date DATE NOT NULL,
-                        status TEXT NOT NULL CHECK(status IN ('registered', 'unregistered')),
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE (user_id, event_id, override_date),
-                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                        FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
-                    )
-                """)
-
                 # Системные записи
                 await cur.execute("""
                     INSERT INTO users (id, telegram_id, username)
@@ -161,20 +72,22 @@ class Database:
                 """)
                 await cur.execute("""
                     INSERT INTO activities (id, name, description, is_active)
-                    VALUES (1, 'Общие события', '', TRUE)
+                    VALUES (1, 'Общие события', 'Это открытые встречи и общесистемные события, на которые автоматически подписаны все участники сообщества.', TRUE)
                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_active = EXCLUDED.is_active
                 """)
 
-                # Синхронизация sequences
-                await cur.execute("SELECT setval('users_id_seq', COALESCE((SELECT MAX(id) FROM users), 1))")
-                await cur.execute("SELECT setval('activities_id_seq', COALESCE((SELECT MAX(id) FROM activities), 1))")
+                # Синхронизация sequences (Гарантируем, что значение sequence >= 1)
+                await cur.execute("SELECT setval('users_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM users), 1), 1))")
+                await cur.execute("SELECT setval('activities_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM activities), 1), 1))")
 
                 default_settings = {
-                    'demurrage_rate': '0.01', 'demurrage_enabled': '0', 'exchange_rate': '1.0',
-                    'welcome_message_bot': DEFAULT_WELCOME_MESSAGE_BOT,
-                    'welcome_message_group': DEFAULT_WELCOME_MESSAGE_GROUP,
-                    'welcome_bonus_amount': '1000',
-                    'default_reminder_text': DEFAULT_REMINDER_TEXT,
+                    'demurrage_rate': '1.0', 'demurrage_enabled': '0', 'exchange_rate': '1.0',
+                    'welcome_message_bot': LEXICON_RU["default_welcome_bot"],
+                    'welcome_message_group': LEXICON_RU["default_welcome_group"],
+                    'welcome_bonus_amount': '1500',
+                    'welcome_bonus_message': LEXICON_RU["default_welcome_bonus"],
+                    'default_reminder_text': LEXICON_RU["default_reminder"],
+                    'activities_description': '<b>🎨 Активности сообщества</b>\n\nВыберите направление:',
                     'demurrage_interval_days': '1',
                     'demurrage_last_run': '1970-01-01'
                 }
@@ -246,6 +159,33 @@ class Database:
                 if user and user['grace_credit_used'] and user['balance'] >= 0:
                     await conn.execute("UPDATE users SET grace_credit_used = FALSE WHERE id = %s", (user_id,))
                     logger.info(f"Grace credit flag reset for user_id {user_id} due to positive balance.")
+
+    async def get_returning_user_stats(self, telegram_id: int) -> dict:
+        """Получает статистику (переведено, получено, списано) для вернувшегося пользователя"""
+        user = await self.get_user(telegram_id=telegram_id)
+        if not user:
+            return None
+        
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                # Отправлено (людям)
+                await cur.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE from_user_id = %s AND to_user_id IS NOT NULL", (user['id'],))
+                sent = (await cur.fetchone())[0]
+                
+                # Получено (от людей)
+                await cur.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE to_user_id = %s AND from_user_id IS NOT NULL", (user['id'],))
+                received = (await cur.fetchone())[0]
+                
+                # Списано системой (демерредж, оплата событий)
+                await cur.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE from_user_id = %s AND to_user_id IS NULL", (user['id'],))
+                deducted = (await cur.fetchone())[0]
+                
+        return {
+            'balance': user['balance'],
+            'sent': sent,
+            'received': received,
+            'deducted': deducted
+        }
 
     async def get_all_activities(self) -> List[Dict[str, Any]]:
         async with self.pool.connection() as conn:
@@ -420,5 +360,233 @@ class Database:
                 "DELETE FROM event_registration_overrides WHERE user_id = %s AND event_id = %s AND override_date = %s",
                 (user['id'], event_id, override_date)
             )
+
+    # --- NEW: Extracted from handlers ---
+
+    async def get_user_balance(self, telegram_id: int) -> Optional[Any]:
+        """Возвращает баланс пользователя по telegram_id."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT balance FROM users WHERE telegram_id = %s", (telegram_id,))
+                row = await cur.fetchone()
+                return row['balance'] if row else None
+
+    async def change_balance(self, target_user_id: int, amount, transaction_type: str, comment: str):
+        """Изменение баланса пользователя (admin add/rem). amount может быть отрицательным для списания."""
+        from decimal import Decimal
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                from_user_id = 0 if transaction_type == 'manual_add' else target_user_id
+                to_user_id = target_user_id if transaction_type == 'manual_add' else 0
+                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, target_user_id))
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
+                    (from_user_id, to_user_id, abs(amount), transaction_type, comment)
+                )
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (target_user_id,))
+
+    async def transfer(self, sender_telegram_id: int, recipient_user_id: int, amount, comment: str) -> dict:
+        """
+        Атомарный перевод средств с проверкой баланса внутри транзакции.
+        Возвращает dict с ключами: success, sender_db_id, sender_balance, error.
+        """
+        from decimal import Decimal
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                result_cursor = await conn.execute(
+                    "SELECT id, balance FROM users WHERE telegram_id = %s FOR UPDATE",
+                    (sender_telegram_id,)
+                )
+                sender_row = await result_cursor.fetchone()
+                if not sender_row:
+                    return {'success': False, 'error': 'sender_not_found'}
+                sender_db_id = sender_row[0]
+                sender_balance = Decimal(str(sender_row[1]))
+                if sender_balance < amount:
+                    return {'success': False, 'error': 'insufficient_funds', 'sender_balance': sender_balance}
+                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (amount, sender_db_id))
+                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, recipient_user_id))
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'transfer', %s)",
+                    (sender_db_id, recipient_user_id, amount, comment)
+                )
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (sender_db_id,))
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (recipient_user_id,))
+                return {'success': True, 'sender_db_id': sender_db_id}
+
+    async def get_transaction_history(self, telegram_id: int, date_limit: datetime) -> tuple:
+        """Возвращает (user_db_id, transactions_list) для истории."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
+                user_db_id_row = await cur.fetchone()
+                if not user_db_id_row:
+                    return None, []
+                user_db_id = user_db_id_row['id']
+                await cur.execute(
+                    "SELECT t.*, sender.username as sender_username, recipient.username as recipient_username "
+                    "FROM transactions t "
+                    "LEFT JOIN users sender ON t.from_user_id = sender.id "
+                    "LEFT JOIN users recipient ON t.to_user_id = recipient.id "
+                    "WHERE (t.to_user_id = %s OR t.from_user_id = %s) AND t.created_at > %s "
+                    "ORDER BY t.created_at DESC",
+                    (user_db_id, user_db_id, date_limit)
+                )
+                return user_db_id, await cur.fetchall()
+
+    async def get_gdp_stats(self, now: datetime) -> dict:
+        """Возвращает статистику экономики сообщества."""
+        from datetime import timedelta
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                async def get_turnover_and_count(days=None):
+                    query = "SELECT COALESCE(SUM(amount), 0) as turnover, COUNT(id) as tx_count FROM transactions WHERE type = 'transfer'"
+                    params = []
+                    if days:
+                        query += " AND created_at > %s"
+                        params.append(now - timedelta(days=days))
+                    await cur.execute(query, params)
+                    return await cur.fetchone()
+                turnover_7d = await get_turnover_and_count(7)
+                turnover_30d = await get_turnover_and_count(30)
+                turnover_all = await get_turnover_and_count()
+                await cur.execute("SELECT COALESCE(SUM(balance), 0) as total FROM users")
+                total_supply = (await cur.fetchone())['total']
+                await cur.execute("SELECT balance FROM users WHERE id = 0")
+                fund_balance = (await cur.fetchone())['balance']
+                return {
+                    'turnover_7d': turnover_7d,
+                    'turnover_30d': turnover_30d,
+                    'turnover_all': turnover_all,
+                    'total_supply': total_supply,
+                    'fund_balance': fund_balance,
+                }
+
+    async def credit_welcome_bonus(self, telegram_id: int, comment: str) -> Any:
+        """Начисляет welcome-бонус. Возвращает сумму бонуса (0 если не начислен)."""
+        from decimal import Decimal
+        bonus_amount_str = await self.get_setting('welcome_bonus_amount', '0')
+        try:
+            welcome_bonus = Decimal(bonus_amount_str)
+            if welcome_bonus <= 0:
+                return Decimal('0')
+            async with self.pool.connection() as conn:
+                result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
+                user_row = await result_cursor.fetchone()
+                if user_row:
+                    user_id = user_row[0]
+                    await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (welcome_bonus, user_id))
+                    await conn.execute(
+                        "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'welcome_bonus', %s)",
+                        (user_id, welcome_bonus, comment)
+                    )
+                    await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user_id,))
+                    logger.info(f"Welcome bonus {welcome_bonus} credited to user {telegram_id}")
+            return welcome_bonus
+        except (ValueError, TypeError) as e:
+            logger.error(f"Could not parse welcome_bonus_amount '{bonus_amount_str}': {e}")
+            return Decimal('0')
+
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """Возвращает всех пользователей."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM users ORDER BY balance DESC")
+                return await cur.fetchall()
+
+    async def get_users_by_ids(self, user_ids: list) -> list:
+        """Возвращает полные данные пользователей по списку ID."""
+        if not user_ids:
+            return []
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM users WHERE id = ANY(%s::int[])", (list(user_ids),))
+                return await cur.fetchall()
+
+    async def get_all_users(self) -> List[Dict[str, Any]]:
+        """Возвращает всех пользователей (без фонда)."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM users WHERE telegram_id != 0 ORDER BY id")
+                return await cur.fetchall()
+
+    # --- TAG RULES ---
+
+    async def get_all_tag_rules(self) -> List[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM tag_rules ORDER BY id")
+                return await cur.fetchall()
+
+    async def get_active_tag_rules(self) -> List[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM tag_rules WHERE is_active = TRUE ORDER BY id")
+                return await cur.fetchall()
+
+    async def get_tag_rule(self, rule_id: int) -> Optional[Dict[str, Any]]:
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM tag_rules WHERE id = %s", (rule_id,))
+                return await cur.fetchone()
+
+    async def create_tag_rule(self, hashtag: str, min_chars: int, reward, daily_limit: int,
+                               thread_id=None, group_msg=None, bot_msg=None, reaction: str = '🏅') -> int:
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """INSERT INTO tag_rules (hashtag, min_chars, reward, daily_limit, thread_id, group_msg, bot_msg, reaction)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (hashtag.lstrip('#').lower(), min_chars, reward, daily_limit, thread_id, group_msg, bot_msg, reaction)
+                )
+                row = await cur.fetchone()
+                return row[0] if row else 0
+
+    async def delete_tag_rule(self, rule_id: int):
+        async with self.pool.connection() as conn:
+            await conn.execute("DELETE FROM tag_rules WHERE id = %s", (rule_id,))
+
+    async def get_rewarded_message(self, message_id: int) -> Optional[Dict[str, Any]]:
+        """Проверяет, было ли уже начислено за это сообщение."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM tag_rewards_log WHERE message_id = %s", (message_id,))
+                return await cur.fetchone()
+
+    async def log_tag_reward(self, user_telegram_id: int, message_id: int, rule_id: int):
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                """INSERT INTO tag_rewards_log (user_telegram_id, message_id, rule_id)
+                   VALUES (%s, %s, %s) ON CONFLICT (message_id) DO NOTHING""",
+                (user_telegram_id, message_id, rule_id)
+            )
+
+    async def count_today_tag_rewards(self, user_telegram_id: int, rule_id: int) -> int:
+        """Считает количество начислений за сегодня для данного пользователя и правила."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """SELECT COUNT(*) FROM tag_rewards_log
+                       WHERE user_telegram_id = %s AND rule_id = %s
+                         AND rewarded_at >= CURRENT_DATE""",
+                    (user_telegram_id, rule_id)
+                )
+                row = await cur.fetchone()
+                return row[0] if row else 0
+
+    async def award_tag_reward(self, telegram_id: int, reward, comment: str):
+        """Начисляет орфы пользователю за хэштег-пост (от фонда, тип manual_add)."""
+        user = await self.get_user(telegram_id=telegram_id)
+        if not user:
+            return
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute("UPDATE users SET balance = balance + %s WHERE telegram_id = %s", (reward, telegram_id))
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'tag_reward', %s)",
+                    (user['id'], reward, comment)
+                )
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE telegram_id = %s", (telegram_id,))
+
 
 db = Database(CONNINFO)

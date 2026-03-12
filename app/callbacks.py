@@ -73,13 +73,13 @@ class EventCreationAction(CallbackData, prefix="evt_create"):
     """
     Колбэк для шагов FSM при создании события.
     Пример: `action="select_activity"`, `action="use_activity_desc"`,
-    `action="set_type"`, `action="select_weekday"`, `action="use_default_reminder"`,
-    `action="confirm_create"`
+    `action="set_type"`, `action="select_weekday"`, `action="toggle_weekday"`,
+    `action="confirm_weekdays"`, `action="use_default_reminder"`, `action="confirm_create"`
     """
     action: str
     activity_id: Optional[int] = None # Используется при выборе активности или создании события для конкретной активности
     event_type: Optional[str] = None # Используется при установке типа события
-    weekday: Optional[int] = None # Используется при выборе дня недели
+    weekday: Optional[int] = None # Используется при выборе и переключении дня недели
 
 class SettingsAction(CallbackData, prefix="set"):
     """
@@ -96,3 +96,12 @@ class TransferAction(CallbackData, prefix="tx"):
     Пример: `action="confirm"`, `action="cancel"`
     """
     action: str
+
+class ConfirmDeleteAction(CallbackData, prefix="del"):
+    """
+    Колбэк для подтверждения удаления сущностей.
+    `item_type`: 'activity' или 'event'
+    `item_id`: ID удаляемого объекта
+    """
+    item_type: str
+    item_id: int

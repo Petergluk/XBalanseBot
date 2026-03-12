@@ -1,5 +1,4 @@
 # XBalanseBot/main.py
-# XBalanseBot/main.py
 # v1.8.9
 # 2025-08-29 04:15:00
 """
@@ -31,7 +30,7 @@ if CURRENT_DIR not in sys.path:
 load_dotenv()
 
 from aiogram import Bot, Dispatcher
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Message, CallbackQuery, ChatMemberUpdated
 
@@ -42,9 +41,9 @@ from apscheduler.triggers.cron import CronTrigger
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE
+from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, REDIS_HOST
 from app.database import db
-from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers
+from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers, tag_reward_handler
 from app.services import scheduler_jobs
 from app.services.webhook_handler import run_webhook_server
 from app import callbacks # Импорт нового модуля callbacks
@@ -96,6 +95,37 @@ async def setup_super_admin():
         logger.info(f"Existing user {SUPER_ADMIN_ID} has been promoted to super admin.")
 
 
+async def setup_bot_commands(bot: Bot):
+    """Регистрирует команды бота в меню Telegram."""
+    from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+
+    # Команды для всех пользователей
+    user_commands = [
+        BotCommand(command="menu", description="🤖 Главное меню"),
+        BotCommand(command="start", description="👋 Начать работу с ботом"),
+        BotCommand(command="help", description="📖 Справка"),
+        BotCommand(command="history", description="📜 История транзакций"),
+        BotCommand(command="gdp", description="📊 Экономика сообщества"),
+        BotCommand(command="cancel", description="❌ Отменить текущее действие"),
+    ]
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+    logger.info(f"Bot commands set: {len(user_commands)} user commands.")
+
+    # Расширенные команды для супер-админа
+    if SUPER_ADMIN_ID:
+        admin_commands = user_commands + [
+            BotCommand(command="settings", description="⚙️ Настройки бота"),
+            BotCommand(command="users", description="👥 Список пользователей"),
+            BotCommand(command="gide", description="📘 Гид по валюте"),
+            BotCommand(command="test", description="🧪 Тестовые команды"),
+        ]
+        try:
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=SUPER_ADMIN_ID))
+            logger.info(f"Admin commands set for super admin {SUPER_ADMIN_ID}: {len(admin_commands)} commands.")
+        except Exception as e:
+            logger.warning(f"Could not set admin commands for {SUPER_ADMIN_ID}: {e}")
+
+
 async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
     """Configure the background scheduler."""
     scheduler.add_job(scheduler_jobs.process_demurrage, CronTrigger(hour=0, minute=1), args=(bot,))
@@ -118,15 +148,18 @@ async def main():
 
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-    bot.scheduler = scheduler
-    dp = Dispatcher(storage=MemoryStorage())
+    
+    redis_url = f"redis://{REDIS_HOST}:6379/0"
+    storage = RedisStorage.from_url(redis_url, key_builder=DefaultKeyBuilder(with_destiny=True))
+    dp = Dispatcher(storage=storage, scheduler=scheduler)
 
     dp.message.outer_middleware(logging_middleware)
     dp.callback_query.outer_middleware(logging_middleware)
     dp.chat_member.outer_middleware(logging_middleware)
 
-    dp.include_router(admin_commands.router)
     dp.include_router(common.router)
+    dp.include_router(tag_reward_handler.router)  # Must be before admin router (no middleware)
+    dp.include_router(admin_commands.router)
     dp.include_router(user_commands.router)
     dp.include_router(activity_handlers.router)
     dp.include_router(event_handlers.router)
@@ -134,6 +167,7 @@ async def main():
     try:
         await db.initialize()
         await setup_super_admin()
+        await setup_bot_commands(bot)
         await setup_scheduler(bot, scheduler)
         await bot.delete_webhook(drop_pending_updates=True)
 
@@ -161,15 +195,10 @@ async def main():
             await db.close()
 
         await bot.session.close()
-        logger.info("Bot session and database pool closed.")
+        await storage.close()
+        logger.info("Bot session, storage, and database pool closed.")
 
-        if DEV_MODE:
-            logger.info("Stopping docker-compose services...")
-            try:
-                subprocess.run(["docker-compose", "down"], check=True, capture_output=True)
-                logger.info("Docker services stopped successfully.")
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logger.error(f"Failed to run 'docker-compose down': {e}")
+
 
 
 if __name__ == '__main__':

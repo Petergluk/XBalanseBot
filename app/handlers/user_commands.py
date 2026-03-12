@@ -1,5 +1,4 @@
 # XBalanseBot/app/handlers/user_commands.py
-# XBalanseBot/app/handlers/user_commands.py
 # FULL FILE EMITTED: YES
 # v1.7.3
 # 2025-08-29 04:15:00
@@ -18,6 +17,7 @@
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
@@ -27,13 +27,14 @@ from psycopg.rows import dict_row
 
 from app.config import CURRENCY_SYMBOL
 from app.database import db
+from app.lexicon import LEXICON_RU
 from app.handlers import activity_handlers, common as common_handlers, event_handlers
 from app.keyboards import (get_back_to_menu_keyboard, get_main_menu_keyboard,
                            get_transfer_confirmation_keyboard)
 from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
-                       get_user_balance, is_user_in_group)
+                       get_user_balance, is_admin, is_user_in_group)
 from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
@@ -54,32 +55,19 @@ async def cleanup_transfer_dialog(state: FSMContext, bot: Bot, chat_id: int):
 
 async def _get_history_text(telegram_id: int, days: int = 30) -> str:
     current_balance = await get_user_balance(telegram_id)
-    async with db.pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
-            user_db_id_row = await cur.fetchone()
-            if not user_db_id_row:
-                return "Не удалось найти ваш профиль в системе."
-            user_db_id = user_db_id_row['id']
-            date_limit = datetime.now() - timedelta(days=days)
-            await cur.execute(
-                "SELECT t.*, sender.username as sender_username, recipient.username as recipient_username "
-                "FROM transactions t "
-                "LEFT JOIN users sender ON t.from_user_id = sender.id "
-                "LEFT JOIN users recipient ON t.to_user_id = recipient.id "
-                "WHERE (t.to_user_id = %s OR t.from_user_id = %s) AND t.created_at > %s "
-                "ORDER BY t.created_at DESC",
-                (user_db_id, user_db_id, date_limit)
-            )
-            all_txs = await cur.fetchall()
+    date_limit = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=days)
+    user_db_id, all_txs = await db.get_transaction_history(telegram_id, date_limit)
+    
+    if user_db_id is None:
+        return LEXICON_RU["msg_user_not_found_profile"]
 
     if not all_txs:
-        return f"За последние {days} дней транзакций не найдено."
+        return LEXICON_RU["msg_no_transactions"].format(days=days)
 
-    response_parts = [f"📊 <b>История транзакций за последние {days} дней:</b>"]
+    response_parts = [LEXICON_RU["msg_history_header"].format(days=days)]
     history_text = format_transactions_history(all_txs, user_db_id)
     response_parts.append(history_text)
-    response_parts.append(f"\n💰 <b>Текущий баланс:</b> {format_amount(current_balance)} {CURRENCY_SYMBOL}")
+    response_parts.append(LEXICON_RU["msg_current_balance"].format(balance=format_amount(current_balance), currency_symbol=CURRENCY_SYMBOL))
     return "".join(response_parts)
 
 
@@ -92,22 +80,24 @@ async def cancel_transfer_dialog(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(message_ids=message_ids)
     
     await cleanup_transfer_dialog(state, bot, message.chat.id)
-    await message.answer("Перевод отменен.")
+    await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
 
 
 # --- БЛОК ГЛАВНОГО МЕНЮ ---
 
 async def show_main_menu(message: Message | CallbackQuery):
-    text = "🤖 **Главное меню**\n\nВыберите действие:"
+    user_id = message.from_user.id
+    balance = await get_user_balance(user_id)
+    text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
     keyboard = get_main_menu_keyboard()
     
     if isinstance(message, Message):
-        await message.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     elif isinstance(message, CallbackQuery):
         try:
-            await message.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+            await message.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         except Exception:
-            await message.bot.send_message(message.from_user.id, text, reply_markup=keyboard, parse_mode="Markdown")
+            await message.bot.send_message(message.from_user.id, text, reply_markup=keyboard, parse_mode="HTML")
         await message.answer()
 
 @router.message(Command("menu", ignore_case=True))
@@ -120,35 +110,31 @@ async def cmd_menu(message: Message):
 async def process_back_to_menu(callback: CallbackQuery):
     await show_main_menu(callback)
 
-@router.callback_query(GeneralAction.filter(F.action == "menu_balance"))
-async def process_menu_balance(callback: CallbackQuery):
-    await ensure_user_exists(callback.from_user.id, callback.from_user.username, callback.from_user.is_bot)
-    balance = await get_user_balance(callback.from_user.id)
-    tx_count = await get_transaction_count(callback.from_user.id)
-    text = (
-        f"💰 Ваш баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>\n"
-        f"📊 Совершено транзакций: <b>{tx_count}</b>"
-    )
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_back_to_menu_keyboard(),
-    )
+@router.callback_query(GeneralAction.filter(F.action == "menu_balance_history"))
+async def process_menu_balance_history(callback: CallbackQuery):
+    """Показывает баланс и историю транзакций в одном сообщении."""
     await callback.answer()
-
-@router.callback_query(GeneralAction.filter(F.action == "menu_history"))
-async def process_menu_history(callback: CallbackQuery):
-    await callback.answer()
-    await callback.message.delete()
     user = callback.from_user
     await ensure_user_exists(user.id, user.username, user.is_bot)
+    balance = await get_user_balance(user.id)
     
     history_text = await _get_history_text(user.id, days=30)
     
-    await callback.message.answer(
-        history_text,
-        reply_markup=get_back_to_menu_keyboard(),
-        parse_mode="HTML"
-    )
+    text = LEXICON_RU["msg_balance_and_history"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL, history_text=history_text)
+    
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        await callback.message.delete()
+        await callback.message.answer(
+            text,
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_activity"))
 async def process_menu_activity(callback: CallbackQuery):
@@ -163,17 +149,22 @@ async def process_menu_event(callback: CallbackQuery):
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_help"))
 async def process_menu_help(callback: CallbackQuery):
+    """Показывает справку с учётом роли пользователя."""
     await callback.answer()
-    await callback.message.delete()
-    await common_handlers.cmd_help(callback.message)
+    from app.lexicon import LEXICON_RU
+    help_text = LEXICON_RU["help_user"].format(currency_symbol=CURRENCY_SYMBOL)
+    if await is_admin(callback.from_user.id):
+        help_text += LEXICON_RU["help_admin_addon"]
+    await callback.message.edit_text(help_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_send"))
 async def process_menu_send(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(TransferStates.waiting_for_recipient)
+    from app.keyboards import get_back_to_menu_keyboard
     sent_message = await callback.message.edit_text(
-        "Кому вы хотите сделать перевод? Укажите @username получателя.\n\nДля отмены введите /cancel",
-        reply_markup=None
+        LEXICON_RU["msg_transfer_ask_recipient"],
+        reply_markup=get_back_to_menu_keyboard()
     )
     await state.update_data(message_ids=[sent_message.message_id])
 
@@ -184,12 +175,10 @@ async def process_menu_send(callback: CallbackQuery, state: FSMContext):
 async def cmd_balance(message: Message):
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     balance = await get_user_balance(message.from_user.id)
-    tx_count = await get_transaction_count(message.from_user.id)
-    await message.answer(
-        f"💰 Ваш баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>\n"
-        f"📊 Совершено транзакций: <b>{tx_count}</b>",
-        parse_mode="HTML"
-    )
+    history_text = await _get_history_text(message.from_user.id, days=30)
+    
+    text = LEXICON_RU["msg_balance_and_history"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL, history_text=history_text)
+    await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
 
 @router.message(Command("send", ignore_case=True))
 async def cmd_send(message: Message, state: FSMContext, bot: Bot):
@@ -199,17 +188,17 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
     if len(args) >= 3:
         recipient_username = args[1].lstrip('@').lower()
         if recipient_username == (message.from_user.username or '').lower():
-            await message.reply("❌ Нельзя отправить средства самому себе.")
+            await message.reply(LEXICON_RU["err_transfer_self"])
             return
         try:
             amount = Decimal(args[2])
             if amount <= 0: raise ValueError
         except (InvalidOperation, ValueError):
-            await message.reply("❌ Неверная сумма. Пожалуйста, укажите положительное число.")
+            await message.reply(LEXICON_RU["err_transfer_invalid_amount"])
             return
         recipient = await db.get_user(username=recipient_username)
         if not recipient or (recipient['telegram_id'] != 0 and not await is_user_in_group(bot, recipient['telegram_id'])):
-            await message.reply(f"❌ Пользователь @{recipient_username} не найден или не является участником группы.")
+            await message.reply(LEXICON_RU["err_user_not_found"].format(recipient_username=recipient_username))
             return
         comment = ' '.join(args[3:]) if len(args) > 3 else "Перевод"
         await perform_transfer_and_notify(message, state, bot, recipient, amount, comment, is_dialog=False)
@@ -217,11 +206,15 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
 
     if len(args) == 1:
         await state.set_state(TransferStates.waiting_for_recipient)
-        sent_message = await message.answer("Кому вы хотите сделать перевод? Укажите @username получателя.\n\nДля отмены введите /cancel")
+        from app.keyboards import get_back_to_menu_keyboard
+        sent_message = await message.answer(
+            "Кому вы хотите сделать перевод? Укажите @username получателя.\n\nДля отмены введите /cancel",
+            reply_markup=get_back_to_menu_keyboard()
+        )
         await state.update_data(message_ids=[message.message_id, sent_message.message_id])
         return
         
-    await message.reply("❌ Неверный формат. Используйте:\n`/send @username сумма [комментарий]`\nили просто `/send` для запуска диалога.", parse_mode="Markdown")
+    await message.reply(LEXICON_RU["err_transfer_format"], parse_mode="Markdown")
 
 @router.message(TransferStates.waiting_for_recipient)
 async def process_recipient_input(message: Message, state: FSMContext, bot: Bot):
@@ -231,21 +224,25 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
 
     recipient_username = message.text.lstrip('@').lower()
     if recipient_username == (message.from_user.username or '').lower():
-        sent_message = await message.reply("❌ Нельзя отправить средства самому себе. Укажите другой @username.")
+        sent_message = await message.reply(LEXICON_RU["err_transfer_self_dialog"])
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
 
     recipient = await db.get_user(username=recipient_username)
     if not recipient or (recipient['telegram_id'] != 0 and not await is_user_in_group(bot, recipient['telegram_id'])):
-        sent_message = await message.reply(f"❌ Пользователь @{recipient_username} не найден или не является участником группы. Попробуйте еще раз.\n\nДля отмены введите /cancel")
+        sent_message = await message.reply(LEXICON_RU["err_user_not_found_dialog"].format(recipient_username=recipient_username))
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
     
     await state.update_data(recipient_id=recipient['id'], recipient_telegram_id=recipient['telegram_id'], recipient_username=recipient_username)
     await state.set_state(TransferStates.waiting_for_amount)
-    sent_message = await message.answer(f"Отлично. Какую сумму в {CURRENCY_SYMBOL} вы хотите перевести @{recipient_username}?\n\nДля отмены введите /cancel")
+    from app.keyboards import get_back_to_menu_keyboard
+    sent_message = await message.answer(
+        LEXICON_RU["msg_transfer_ask_amount"].format(currency_symbol=CURRENCY_SYMBOL, recipient_username=recipient_username),
+        reply_markup=get_back_to_menu_keyboard()
+    )
     message_ids.append(sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
@@ -259,21 +256,34 @@ async def process_amount_input(message: Message, state: FSMContext):
         amount = Decimal(message.text.replace(',', '.'))
         if amount <= 0: raise ValueError
     except (InvalidOperation, ValueError):
-        sent_message = await message.reply("❌ Сумма должна быть положительным числом. Попробуйте еще раз.\n\nДля отмены введите /cancel")
+        from app.keyboards import get_back_to_menu_keyboard
+        sent_message = await message.reply(
+            LEXICON_RU["err_transfer_invalid_amount_dialog"],
+            reply_markup=get_back_to_menu_keyboard()
+        )
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
         
     sender_balance = await get_user_balance(message.from_user.id)
     if sender_balance < amount:
-        sent_message = await message.reply(f"❌ Недостаточно средств. Ваш баланс: <b>{format_amount(sender_balance)} {CURRENCY_SYMBOL}</b>. Введите другую сумму.\n\nДля отмены введите /cancel", parse_mode="HTML")
+        from app.keyboards import get_back_to_menu_keyboard
+        sent_message = await message.reply(
+            LEXICON_RU["err_insufficient_funds"].format(balance=format_amount(sender_balance), currency_symbol=CURRENCY_SYMBOL),
+            reply_markup=get_back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
 
     await state.update_data(amount=str(amount))
     await state.set_state(TransferStates.waiting_for_comment)
-    sent_message = await message.answer("Теперь добавьте короткий комментарий к переводу (например, 'За кофе').\n\nДля отмены введите /cancel")
+    from app.keyboards import get_back_to_menu_keyboard
+    sent_message = await message.answer(
+        LEXICON_RU["msg_transfer_ask_comment"],
+        reply_markup=get_back_to_menu_keyboard()
+    )
     message_ids.append(sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
@@ -289,7 +299,10 @@ async def process_comment_input(message: Message, state: FSMContext):
     amount = Decimal(dialog_data['amount'])
     recipient_username = dialog_data['recipient_username']
     
-    confirmation_text = (f"Пожалуйста, проверьте детали перевода:\n\n➡️ <b>Получатель:</b> @{recipient_username}\n💰 <b>Сумма:</b> {format_amount(amount)} {CURRENCY_SYMBOL}\n💬 <b>Комментарий:</b> {message.text}\n\nВсё верно?")
+    confirmation_text = LEXICON_RU["msg_transfer_confirm"].format(
+        recipient_username=recipient_username, amount=format_amount(amount),
+        currency_symbol=CURRENCY_SYMBOL, comment=message.text
+    )
     
     await state.set_state(TransferStates.waiting_for_confirmation)
     sent_message = await message.answer(confirmation_text, reply_markup=get_transfer_confirmation_keyboard(), parse_mode="HTML")
@@ -313,7 +326,7 @@ async def process_transfer_confirmation(callback: CallbackQuery, state: FSMConte
 @router.callback_query(TransferStates.waiting_for_confirmation, TransferAction.filter(F.action == "cancel"))
 async def process_transfer_cancel(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await cleanup_transfer_dialog(state, bot, callback.message.chat.id)
-    await callback.message.answer("Перевод отменен.")
+    await callback.message.answer(LEXICON_RU["msg_action_cancelled_plain"])
     await callback.answer()
 
 
@@ -324,38 +337,32 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
     if is_dialog:
         await cleanup_transfer_dialog(state, bot, chat_id)
 
-    sender_balance = await get_user_balance(sender.id)
-    if sender_balance < amount:
-        await bot.send_message(chat_id, f"❌ Недостаточно средств. Ваш баланс: <b>{format_amount(sender_balance)} {CURRENCY_SYMBOL}</b>", parse_mode="HTML")
-        return
-
     try:
-        async with db.pool.connection() as conn:
-            async with conn.transaction():
-                result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (sender.id,))
-                sender_db_id = (await result_cursor.fetchone())[0]
-                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (amount, sender_db_id))
-                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, recipient['id']))
-                await conn.execute("INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'transfer', %s)", (sender_db_id, recipient['id'], amount, comment))
-                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id IN (%s, %s)", (sender_db_id, recipient['id']))
+        result = await db.transfer(sender.id, recipient['id'], amount, comment)
+        
+        if not result['success']:
+            if result['error'] == 'sender_not_found':
+                await bot.send_message(chat_id, LEXICON_RU["err_sender_not_found"])
+            elif result['error'] == 'insufficient_funds':
+                await bot.send_message(chat_id, LEXICON_RU["err_insufficient_funds_plain"].format(balance=format_amount(result['sender_balance']), currency_symbol=CURRENCY_SYMBOL), parse_mode="HTML")
+            return
         
         logger.info(f"Transfer successful: {sender.id} -> {recipient['telegram_id']}, amount: {amount}")
         await db.handle_debt_repayment(recipient['id'])
 
-        response_text = (f"✅ Перевод выполнен!\n\n<b>Получатель:</b> @{recipient['username']}\n<b>Сумма:</b> {format_amount(amount)} {CURRENCY_SYMBOL}\n<b>Комментарий:</b> {comment}")
+        response_text = LEXICON_RU["msg_transfer_success"].format(recipient_username=recipient['username'], amount=format_amount(amount), currency_symbol=CURRENCY_SYMBOL, comment=comment)
         await bot.send_message(chat_id, response_text, parse_mode="HTML")
         
         if recipient['telegram_id'] != 0:
             try:
                 sender_username = sender.username or f"user{sender.id}"
-                await bot.send_message(recipient['telegram_id'], f"💸 Вам поступил перевод!\n\n<b>Отправитель:</b> @{sender_username}\n<b>Сумма:</b> {format_amount(amount)} {CURRENCY_SYMBOL}\n<b>Комментарий:</b> {comment}", parse_mode="HTML")
+                await bot.send_message(recipient['telegram_id'], LEXICON_RU["msg_transfer_received"].format(sender_username=sender_username, amount=format_amount(amount), currency_symbol=CURRENCY_SYMBOL, comment=comment), parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Could not send notification to recipient {recipient['telegram_id']}: {e}")
 
     except Exception as e:
         logger.error(f"Transaction failed between users {sender.id} -> {recipient['telegram_id']}: {e}", exc_info=True)
-        await bot.send_message(chat_id, "❌ Произошла ошибка при выполнении перевода. Попробуйте позже.")
-
+        await bot.send_message(chat_id, LEXICON_RU["err_transfer_failed"])
 
 @router.message(Command("history", ignore_case=True))
 async def cmd_history(message: Message):
@@ -368,39 +375,23 @@ async def cmd_history(message: Message):
         days = 30
     
     history_text = await _get_history_text(user.id, days=days)
-    await message.answer(history_text, parse_mode="HTML")
+    await message.answer(history_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+
 
 
 @router.message(Command("gdp", "ввп", ignore_case=True))
 async def cmd_gdp(message: Message):
-    async with db.pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            now = datetime.now()
-            async def get_turnover_and_count(days=None):
-                query = "SELECT COALESCE(SUM(amount), 0) as turnover, COUNT(id) as tx_count FROM transactions WHERE type = 'transfer'"
-                params = []
-                if days:
-                    query += " AND created_at > %s"
-                    params.append(now - timedelta(days=days))
-                await cur.execute(query, params)
-                return await cur.fetchone()
-            turnover_7d_data = await get_turnover_and_count(7)
-            turnover_30d_data = await get_turnover_and_count(30)
-            turnover_all_data = await get_turnover_and_count()
-            await cur.execute("SELECT COALESCE(SUM(balance), 0) as total FROM users")
-            total_supply = (await cur.fetchone())['total']
-            await cur.execute("SELECT balance FROM users WHERE id = 0")
-            fund_balance = (await cur.fetchone())['balance']
-            response = f"""
-📊 <b>Экономика сообщества:</b>
-
-💱 <b>Оборот (переводы между пользователями):</b>
-• За 7 дней: {format_amount(turnover_7d_data['turnover'])} {CURRENCY_SYMBOL} ({turnover_7d_data['tx_count']} транзакций)
-• За 30 дней: {format_amount(turnover_30d_data['turnover'])} {CURRENCY_SYMBOL} ({turnover_30d_data['tx_count']} транзакций)
-• За все время: {format_amount(turnover_all_data['turnover'])} {CURRENCY_SYMBOL} ({turnover_all_data['tx_count']} транзакций)
-
-💰 <b>Денежная масса:</b>
-• Всего в системе: {format_amount(total_supply)} {CURRENCY_SYMBOL}
-• В фонде сообщества: {format_amount(fund_balance)} {CURRENCY_SYMBOL}
-"""
-            await message.answer(response, parse_mode="HTML")
+    now = datetime.now(ZoneInfo("Europe/Moscow"))
+    stats = await db.get_gdp_stats(now)
+    response = LEXICON_RU["msg_gdp_stats"].format(
+        currency_symbol=CURRENCY_SYMBOL,
+        turnover_7d=format_amount(stats['turnover_7d']['turnover']),
+        tx_count_7d=stats['turnover_7d']['tx_count'],
+        turnover_30d=format_amount(stats['turnover_30d']['turnover']),
+        tx_count_30d=stats['turnover_30d']['tx_count'],
+        turnover_all=format_amount(stats['turnover_all']['turnover']),
+        tx_count_all=stats['turnover_all']['tx_count'],
+        total_supply=format_amount(stats['total_supply']),
+        fund_balance=format_amount(stats['fund_balance'])
+    )
+    await message.answer(response, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")

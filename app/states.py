@@ -33,6 +33,8 @@ class AdminEditStates(StatesGroup):
     waiting_for_exchange_rate = State()
     waiting_for_welcome_bonus = State()
     waiting_for_reminder_text = State()
+    waiting_for_activities_description = State()
+    waiting_for_welcome_bonus_text = State()
 
 class FundPaymentStates(StatesGroup):
     """Состояния для процесса выплаты из фонда."""
@@ -68,11 +70,12 @@ class EventCreationStates(StatesGroup):
     waiting_for_date = State()
     waiting_for_weekday = State()
     waiting_for_time = State()
+    waiting_for_end_date = State()  # Дата окончания для регулярных событий
     waiting_for_cost = State()
     waiting_for_link = State()
     waiting_for_reminder_time = State()
     waiting_for_reminder_text = State()
-    waiting_for_confirmation = State() # Новое состояние для предпросмотра
+    waiting_for_confirmation = State()
 
 class EventEditStates(StatesGroup):
     """
@@ -89,3 +92,30 @@ class EventEditStates(StatesGroup):
     waiting_for_new_link = State()
     waiting_for_new_reminder_time = State()
     waiting_for_new_reminder_text = State()
+
+class BroadcastStates(StatesGroup):
+    """
+    Состояния для рассылки сообщений подписчикам активности.
+    data: `activity_id`, `activity_name`, `chat_id`, `message_id`
+    """
+    waiting_for_message = State()
+    waiting_for_schedule = State()
+    waiting_for_datetime = State()
+    waiting_for_confirmation = State()
+
+class TagRuleCreationStates(StatesGroup):
+    """
+    Состояния для FSM создания правила начисления по хэштегу.
+    data: `hashtag`, `min_chars`, `reward`, `daily_limit`, `thread_id`,
+          `group_msg`, `bot_msg`, `reaction`
+    """
+    waiting_for_hashtag = State()
+    waiting_for_min_chars = State()
+    waiting_for_reward = State()
+    waiting_for_daily_limit = State()
+    waiting_for_thread_id = State()
+    waiting_for_group_msg = State()
+    waiting_for_bot_msg = State()
+    waiting_for_reaction = State()
+
+

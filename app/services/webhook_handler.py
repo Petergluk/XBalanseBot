@@ -25,16 +25,6 @@ async def health_check(request: web.Request):
     return web.Response(status=200, text="I'm awake!")
 
 
-async def handle_cron_job(request: web.Request):
-    """
-    Обрабатывает запрос от Render Cron Job для "пробуждения" сервиса.
-    Используется, чтобы не дать бесплатному инстансу "уснуть".
-    """
-    logger.info("Cron job 'waker' endpoint triggered successfully. Service is active.")
-    # Просто отвечаем, что все хорошо. Основная работа делается в apscheduler.
-    return web.Response(status=200, text="OK: Service awake.")
-
-
 async def handle_tribute_webhook(request: web.Request):
     """Обработка вебхука от Tribute для пополнения баланса."""
     bot = request.app['bot']
@@ -60,7 +50,7 @@ async def handle_tribute_webhook(request: web.Request):
             logger.warning(f"User {telegram_id} from webhook is not in the main group.")
             return web.Response(status=200, text="OK (user not in group)")
 
-        await ensure_user_exists(telegram_id, username)
+        await ensure_user_exists(telegram_id, username, is_bot=False)
         
         exchange_rate_str = await db.get_setting('exchange_rate', '1.0')
         exchange_rate = Decimal(exchange_rate_str)

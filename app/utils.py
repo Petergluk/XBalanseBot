@@ -16,12 +16,37 @@ from datetime import datetime, timedelta, time
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from aiogram import Bot
-from app.config import MAIN_GROUP_ID, CURRENCY_SYMBOL
+from app.config import MAIN_GROUP_ID, CURRENCY_SYMBOL, DEV_MODE
 from app.database import db
 
 logger = logging.getLogger(__name__)
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+WEEKDAYS_RU = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+WEEKDAYS_SHORT_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+def parse_weekdays(weekday_val: str | int | None) -> list[int]:
+    """Парсит значение из БД (строка '0,2', число 0 или None) в отсортированный список int."""
+    if weekday_val is None:
+        return []
+    if isinstance(weekday_val, int):
+        return [weekday_val]
+    # Если строка (например '0, 2')
+    try:
+        parts = [int(x.strip()) for x in str(weekday_val).split(',') if x.strip().isdigit()]
+        return sorted(list(set(parts)))
+    except ValueError:
+        return []
+
+def format_weekdays(weekday_val: str | int | None) -> str:
+    """Форматирует значение БД в короткую строку, например 'Пн, Ср, Пт'."""
+    days = parse_weekdays(weekday_val)
+    if not days:
+        return "Не задано"
+    if len(days) == 7:
+        return "Ежедневно"
+    return ", ".join([WEEKDAYS_SHORT_RU[d] for d in days])
 
 def format_amount(amount: Decimal) -> str:
     """
@@ -155,36 +180,48 @@ async def ensure_user_exists(telegram_id: int, username: str | None, is_bot: boo
 def get_next_run_time(
     event_type: str, 
     event_date: datetime | None, 
-    weekday: int | None, 
+    weekday_val: str | int | None, 
     event_time: time | None,
     last_run: datetime | None = None
 ) -> datetime | None:
     """
     Вычисляет следующую дату и время для события на основе его типа и расписания.
     Всегда возвращает aware datetime в Europe/Moscow.
+    Поддерживает мульти-дни недели для recurring (например '0,2,4').
     """
     now = datetime.now(MOSCOW_TZ)
 
     if event_type == 'single':
-        # ИСПРАВЛЕНИЕ: >= вместо >, чтобы включать события, наступающие прямо сейчас.
         if event_date and event_date >= now:
             return event_date
         return None
 
-    if event_type == 'recurring' and weekday is not None and event_time is not None:
+    if event_type == 'recurring' and weekday_val is not None and event_time is not None:
+        weekdays = parse_weekdays(weekday_val)
+        if not weekdays:
+            return None
+            
         today_weekday = now.weekday()
-        days_ahead = weekday - today_weekday
+        
+        best_target_dt = None
+        min_days_ahead = -1
 
-        if days_ahead < 0:
-            days_ahead += 7
-        elif days_ahead == 0:
-            # ИСПРАВЛЕНИЕ: > вместо >=. Если время еще не прошло, событие должно быть сегодня.
-            # Если время уже наступило или прошло, переносим на следующую неделю.
-            if now.time() > event_time:
-                days_ahead = 7
+        for wd in weekdays:
+            days_ahead = wd - today_weekday
+            if days_ahead < 0:
+                days_ahead += 7
+            elif days_ahead == 0:
+                # Если время уже наступило или прошло, переносим этот день на следующую неделю.
+                if now.time() > event_time:
+                    days_ahead = 7
+            
+            # Находим минимальное положительное окно ожидания
+            if min_days_ahead == -1 or days_ahead < min_days_ahead:
+                min_days_ahead = days_ahead
 
-        target_date = now.date() + timedelta(days=days_ahead)
-        target_dt = datetime.combine(target_date, event_time).replace(tzinfo=MOSCOW_TZ)
-        return target_dt
+        if min_days_ahead != -1:
+            target_date = now.date() + timedelta(days=min_days_ahead)
+            best_target_dt = datetime.combine(target_date, event_time).replace(tzinfo=MOSCOW_TZ)
+            return best_target_dt
 
     return None

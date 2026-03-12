@@ -19,7 +19,8 @@ from zoneinfo import ZoneInfo
 
 from app.database import db
 from app.utils import format_amount, get_next_run_time
-from app.config import CURRENCY_SYMBOL, DEFAULT_REMINDER_TEXT
+from app.config import CURRENCY_SYMBOL
+from app.lexicon import LEXICON_RU
 
 logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
@@ -33,7 +34,7 @@ async def schedule_event_jobs(event: dict, bot: Bot, scheduler: AsyncIOScheduler
     next_run = get_next_run_time(
         event_type=event['event_type'],
         event_date=event.get('event_date'),
-        weekday=event.get('weekday'),
+        weekday_val=event.get('weekday'),
         event_time=event.get('event_time'),
         last_run=event.get('last_run')
     )
@@ -92,14 +93,7 @@ async def _get_final_participants(event: dict, event_date: date) -> list:
     if not final_participant_ids:
         return []
 
-    # Получаем полные данные пользователей по финальным ID
-    async with db.pool.connection() as conn:
-        async with conn.cursor(row_factory=dict_row) as cur:
-            query = "SELECT * FROM users WHERE id = ANY(%s::int[])"
-            await cur.execute(query, (list(final_participant_ids),))
-            final_participants = await cur.fetchall()
-            
-    return final_participants
+    return await db.get_users_by_ids(list(final_participant_ids))
 
 
 async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler):
@@ -202,7 +196,7 @@ async def handle_reminders_for_event(bot: Bot, event: dict):
     
     reminder_text = event['reminder_text']
     if reminder_text == ".":
-        reminder_text = await db.get_setting('default_reminder_text', DEFAULT_REMINDER_TEXT)
+        reminder_text = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
 
     try:
         formatted_text = reminder_text.format(
@@ -248,16 +242,19 @@ async def process_demurrage(bot: Bot):
             
         logger.info("Demurrage interval passed. Starting process...")
         
-        rate_str = await db.get_setting('demurrage_rate', '0.01')
-        rate = Decimal(rate_str)
+        rate_str = await db.get_setting('demurrage_rate', '1.0')
+        rate = Decimal(rate_str) / 100
         if rate <= 0:
-            logger.info(f"Demurrage rate is zero or negative ({rate}). Skipping.")
+            logger.info(f"Demurrage rate is zero or negative ({rate_str}%). Skipping.")
             return
     except (ValueError, TypeError) as e:
         logger.error(f"Could not get or parse demurrage settings: {e}")
         return
 
     try:
+        users_processed = 0
+        total_demurrage = Decimal('0')
+        
         async with db.pool.connection() as conn:
             async with conn.transaction():
                 async with conn.cursor(row_factory=dict_row) as cur:
@@ -266,28 +263,30 @@ async def process_demurrage(bot: Bot):
 
                 if not users_to_tax:
                     logger.info("No users with positive balance found. Demurrage process finished.")
-                    await db.set_setting('demurrage_last_run', date.today().isoformat())
-                    return
-
-                total_demurrage = Decimal('0')
-                fund_user_id = 0
-                for user in users_to_tax:
-                    demurrage_amount = (user['balance'] * rate).quantize(Decimal('0.0001'))
-                    if demurrage_amount <= 0: 
-                        continue
+                    # return out of transaction safely, then save last_run
+                else:
+                    fund_user_id = 0
+                    for user in users_to_tax:
+                        demurrage_amount = (user['balance'] * rate).quantize(Decimal('0.0001'))
+                        if demurrage_amount <= 0: 
+                            continue
+                        
+                        await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (demurrage_amount, user['id']))
+                        await conn.execute(
+                            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'demurrage', %s)",
+                            (user['id'], fund_user_id, demurrage_amount, f"Демерредж {rate*100}%")
+                        )
+                        total_demurrage += demurrage_amount
+                        users_processed += 1
                     
-                    await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (demurrage_amount, user['id']))
-                    await conn.execute(
-                        "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'demurrage', %s)",
-                        (user['id'], fund_user_id, demurrage_amount, f"Демерредж {rate*100}%")
-                    )
-                    total_demurrage += demurrage_amount
-                
-                if total_demurrage > 0:
-                    await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (total_demurrage, fund_user_id))
-                
-                await db.set_setting('demurrage_last_run', date.today().isoformat())
-                
-        logger.info(f"Demurrage successfully processed for {len(users_to_tax)} users. Total amount: {format_amount(total_demurrage)} {CURRENCY_SYMBOL}.")
+                    if total_demurrage > 0:
+                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (total_demurrage, fund_user_id))
+        
+        # Если транзакция не выбросила исключение, смело ставим дату последнего запуска
+        await db.set_setting('demurrage_last_run', date.today().isoformat())
+        
+        if users_processed > 0:
+            logger.info(f"Demurrage successfully processed for {users_processed} users. Total amount: {format_amount(total_demurrage)} {CURRENCY_SYMBOL}.")
+            
     except Exception as e:
         logger.error(f"An error occurred during demurrage process. Transaction rolled back. Error: {e}", exc_info=True)

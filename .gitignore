@@ -54,7 +54,6 @@ env/
 # Project specific
 *.log
 backups/
-tests/
 temp/
 update/
 

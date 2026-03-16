@@ -36,7 +36,8 @@ async def schedule_event_jobs(event: dict, bot: Bot, scheduler: AsyncIOScheduler
         event_date=event.get('event_date'),
         weekday_val=event.get('weekday'),
         event_time=event.get('event_time'),
-        last_run=event.get('last_run')
+        last_run=event.get('last_run'),
+        end_date=event.get('end_date')
     )
 
     if not next_run or next_run < datetime.now(next_run.tzinfo):
@@ -45,7 +46,7 @@ async def schedule_event_jobs(event: dict, bot: Bot, scheduler: AsyncIOScheduler
 
     scheduler.add_job(
         run_event_payment, 'date', run_date=next_run,
-        args=[event_id, bot, scheduler], id=f"event_payment_{event_id}"
+        args=[event_id, bot, scheduler, next_run], id=f"event_payment_{event_id}"
     )
     logger.info(f"Scheduled payment for event {event_id} at {next_run}")
 
@@ -55,7 +56,7 @@ async def schedule_event_jobs(event: dict, bot: Bot, scheduler: AsyncIOScheduler
         if reminder_datetime > datetime.now(reminder_datetime.tzinfo):
             scheduler.add_job(
                 run_event_reminder, 'date', run_date=reminder_datetime,
-                args=[event_id, bot], id=f"event_reminder_{event_id}"
+                args=[event_id, bot, next_run], id=f"event_reminder_{event_id}"
             )
             logger.info(f"Scheduled reminder for event {event_id} at {reminder_datetime}")
 
@@ -74,8 +75,8 @@ async def _get_final_participants(event: dict, event_date: date) -> list:
     event_id = event['id']
 
     # 1. Базовый список подписчиков
-    if activity_id == 1: # Общие события
-        base_subscribers = await db.get_all_admins() # TODO: Clarify logic for general events
+    if activity_id == 1:  # Общие события
+        base_subscribers = await db.get_all_users()
     else:
         base_subscribers = await db.get_activity_subscribers(activity_id)
     
@@ -96,7 +97,7 @@ async def _get_final_participants(event: dict, event_date: date) -> list:
     return await db.get_users_by_ids(list(final_participant_ids))
 
 
-async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler):
+async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler, scheduled_start_dt: datetime):
     """Выполняется по расписанию. Обрабатывает списания и перепланирует событие."""
     event = await db.get_event(event_id)
     if not event or not event['is_active']:
@@ -105,7 +106,7 @@ async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler
     
     logger.info(f"Running payment job for event {event_id} ('{event['name'] or event['activity_name']}')")
     
-    await handle_payment_for_event(bot, event)
+    await handle_payment_for_event(bot, event, scheduled_start_dt)
 
     await db.update_event(event_id, last_run=datetime.now(MOSCOW_TZ))
 
@@ -114,7 +115,7 @@ async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler
         if updated_event:
             await schedule_event_jobs(updated_event, bot, scheduler)
 
-async def run_event_reminder(event_id: int, bot: Bot):
+async def run_event_reminder(event_id: int, bot: Bot, scheduled_start_dt: datetime):
     """Выполняется по расписанию. Отправляет напоминания."""
     event = await db.get_event(event_id)
     if not event or not event['is_active']:
@@ -123,14 +124,21 @@ async def run_event_reminder(event_id: int, bot: Bot):
         
     logger.info(f"Running reminder job for event {event_id} ('{event['name'] or event['activity_name']}')")
     
-    await handle_reminders_for_event(bot, event)
+    await handle_reminders_for_event(bot, event, scheduled_start_dt)
 
-async def handle_payment_for_event(bot: Bot, event: dict):
+async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: datetime | None = None):
     """Обрабатывает списания для конкретного наступившего события."""
     event_name = event['name'] or event['activity_name']
     fee = event['cost']
     
-    next_run_dt = get_next_run_time(event['event_type'], event.get('event_date'), event.get('weekday'), event.get('event_time'))
+    next_run_dt = event_start_dt or get_next_run_time(
+        event['event_type'],
+        event.get('event_date'),
+        event.get('weekday'),
+        event.get('event_time'),
+        event.get('last_run'),
+        event.get('end_date'),
+    )
     if not next_run_dt:
         logger.warning(f"Could not determine next run time for payment of event {event['id']}. Skipping.")
         return
@@ -162,7 +170,7 @@ async def handle_payment_for_event(bot: Bot, event: dict):
                 start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
                 notification_text = (
                     f"▶️ <b>Начинается событие: «{event_name}»</b>\n"
-                    f"🔗 Ссылка для подключения: {event['link']}{start_time_str}\n\n"
+                    f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
                     f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие."
                 )
                 try:
@@ -172,13 +180,18 @@ async def handle_payment_for_event(bot: Bot, event: dict):
     
     logger.info(f"Successfully processed payments for event {event['id']}.")
 
-async def handle_reminders_for_event(bot: Bot, event: dict):
+async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: datetime | None = None):
     """Отправляет напоминания подписчикам события."""
     if not event['reminder_text']:
         return
 
-    next_run_dt = get_next_run_time(
-        event['event_type'], event.get('event_date'), event.get('weekday'), event.get('event_time')
+    next_run_dt = event_start_dt or get_next_run_time(
+        event['event_type'],
+        event.get('event_date'),
+        event.get('weekday'),
+        event.get('event_time'),
+        event.get('last_run'),
+        event.get('end_date'),
     )
     if not next_run_dt:
         logger.warning(f"Could not determine next run time for reminder of event {event['id']}. Skipping.")

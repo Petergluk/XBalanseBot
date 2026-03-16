@@ -118,7 +118,18 @@ async def _send_activity_details_message(target: Message | CallbackQuery, activi
 
     text += LEXICON_RU["msg_activity_upcoming_events"]
 
-    actual_events_count = sum(1 for e in events if get_next_run_time(e['event_type'], e.get('event_date'), e.get('weekday'), e.get('event_time'), e.get('last_run')) is not None)
+    actual_events_count = sum(
+        1
+        for e in events
+        if get_next_run_time(
+            e['event_type'],
+            e.get('event_date'),
+            e.get('weekday'),
+            e.get('event_time'),
+            e.get('last_run'),
+            e.get('end_date'),
+        ) is not None
+    )
     if not actual_events_count:
         text += LEXICON_RU["msg_activity_no_events"]
 
@@ -153,8 +164,13 @@ async def process_activity_selection(callback: CallbackQuery, callback_data: Act
     # activity_id теперь приходит напрямую из callback_data
     await _send_activity_details_message(callback, callback_data.activity_id)
 
-# NOTE: EventAction(action='view') handler is registered in event_handlers.py
-# This local wrapper just delegates to the activity detail view for inline navigation.
+@router.callback_query(EventAction.filter(F.action == "view_in_activity"))
+async def process_event_selection_from_activity(callback: CallbackQuery, callback_data: EventAction):
+    """Показывает карточку события в контексте активности (с регистрацией/отменой)."""
+    await _view_event_from_activity(callback, callback_data)
+
+# NOTE: EventAction(action='view') handler remains in event_handlers.py (global list /event).
+# Here we keep a dedicated handler for activity-context cards with registration controls.
 async def _view_event_from_activity(callback: CallbackQuery, callback_data: EventAction):
     """
     Шаг 3: Показывает детали конкретного события и кнопки управления регистрацией.
@@ -170,7 +186,7 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
 
     next_run_dt = get_next_run_time(
         event['event_type'], event.get('event_date'), event.get('weekday'),
-        event.get('event_time'), event.get('last_run')
+        event.get('event_time'), event.get('last_run'), event.get('end_date')
     )
 
     if not next_run_dt:
@@ -304,6 +320,10 @@ async def process_manual_registration(callback: CallbackQuery, callback_data: Ev
     event_date = callback_data.target_date # target_date теперь приходит как datetime.date
     user_telegram_id = callback.from_user.id
 
+    if event_date is None:
+        await callback.answer(LEXICON_RU["err_event_not_found"], show_alert=True)
+        return
+
     event = await db.get_event(event_id)
     if not event:
         await callback.answer(LEXICON_RU["err_event_not_found"], show_alert=True)
@@ -327,11 +347,8 @@ async def process_manual_registration(callback: CallbackQuery, callback_data: Ev
             await db.remove_event_override(user_telegram_id, event_id, event_date)
         await callback.answer(LEXICON_RU["msg_event_registration_cancelled"], show_alert=True)
 
-    # После операции возвращаем пользователя к деталям события
-    # Для этого нужно создать новый CallbackQuery, т.к. исходный изменился
-    # Либо вызвать process_event_selection напрямую с нужными параметрами
-    # Проще вызвать с оригинальным callback, но event_id
-    await process_event_selection(callback, EventAction(action="view", event_id=event_id))
+    # Обновляем карточку события в том же "activity"-контексте.
+    await _view_event_from_activity(callback, EventAction(action="view_in_activity", event_id=event_id))
 
 
 # --- ADMIN FLOW: CREATE ACTIVITY ---

@@ -90,7 +90,8 @@ async def cmd_event(message: Message):
             event.get('event_date'),
             event.get('weekday'),
             event.get('event_time'),
-            event.get('last_run')
+            event.get('last_run'),
+            event.get('end_date'),
         )
         if next_run:
             dated_events.append((next_run, event))
@@ -127,7 +128,8 @@ async def process_event_selection(callback: CallbackQuery, callback_data: EventA
         next_run = get_next_run_time(
             event['event_type'], event.get('event_date'),
             event.get('weekday'), event.get('event_time'),
-            event.get('last_run')
+            event.get('last_run'),
+            event.get('end_date'),
         )
         if next_run:
             schedule_str = LEXICON_RU["msg_event_schedule_recurring_next"].format(weekdays=format_weekdays(event['weekday']), next_date_str=next_run.strftime('%d.%m.%Y в %H:%M'), msk_label=MSK_LABEL)
@@ -157,7 +159,14 @@ async def back_to_events_list(callback: CallbackQuery):
         week_ahead = now + timedelta(days=7)
         dated_events = []
         for event in events:
-            next_run = get_next_run_time(event['event_type'], event.get('event_date'), event.get('weekday'), event.get('event_time'), event.get('last_run'))
+            next_run = get_next_run_time(
+                event['event_type'],
+                event.get('event_date'),
+                event.get('weekday'),
+                event.get('event_time'),
+                event.get('last_run'),
+                event.get('end_date'),
+            )
             if next_run:
                 dated_events.append((next_run, event))
         dated_events.sort(key=lambda x: x[0])

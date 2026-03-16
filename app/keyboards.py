@@ -143,13 +143,23 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
     """
     builder = InlineKeyboardBuilder()
     
-    actual_events = [e for e in events if get_next_run_time(e['event_type'], e.get('event_date'), e.get('weekday'), e.get('event_time'), e.get('last_run')) is not None]
+    actual_events = [
+        e for e in events
+        if get_next_run_time(
+            e['event_type'],
+            e.get('event_date'),
+            e.get('weekday'),
+            e.get('event_time'),
+            e.get('last_run'),
+            e.get('end_date'),
+        ) is not None
+    ]
     
     for event in actual_events:
         event_name_display = event['name'] or activity_name
         next_run_dt = get_next_run_time(
             event['event_type'], event.get('event_date'), event.get('weekday'), 
-            event.get('event_time'), event.get('last_run')
+            event.get('event_time'), event.get('last_run'), event.get('end_date')
         )
         date_str = ""
         if next_run_dt:
@@ -158,7 +168,7 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
             date_str = f" ({weekday_name}, {next_run_dt.day} {month_name})"
         
         button_text = f"🗓️ {event_name_display}{date_str}"
-        builder.row(InlineKeyboardButton(text=button_text, callback_data=EventAction(action="view", event_id=event['id']).pack()))
+        builder.row(InlineKeyboardButton(text=button_text, callback_data=EventAction(action="view_in_activity", event_id=event['id']).pack()))
 
     if activity_id != 1: # Системную активность нельзя отписывать
         if is_subscribed:
@@ -278,7 +288,14 @@ async def get_events_keyboard(events: list) -> InlineKeyboardMarkup:
     
     for event_row in events:
         event = dict(event_row)
-        next_run = get_next_run_time(event['event_type'], event.get('event_date'), event.get('weekday'), event.get('event_time'), event.get('last_run'))
+        next_run = get_next_run_time(
+            event['event_type'],
+            event.get('event_date'),
+            event.get('weekday'),
+            event.get('event_time'),
+            event.get('last_run'),
+            event.get('end_date'),
+        )
         
         if not next_run: continue # Пропускаем события без будущих запусков
 

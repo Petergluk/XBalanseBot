@@ -16,6 +16,7 @@
 """
 import logging
 from decimal import Decimal, InvalidOperation
+from html import escape
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -90,7 +91,16 @@ async def _change_balance(
         logger.info(f"Admin {admin_user.id} performed '{transaction_type}' for user {target_user['telegram_id']} ({target_user['username']}). Amount: {amount}, Comment: {comment}")
         await bot.send_message(admin_user.id, LEXICON_RU["msg_admin_balance_changed"].format(action_word=action_word, amount=format_amount(abs(amount)), currency_symbol=CURRENCY_SYMBOL, preposition=preposition, username=target_user['username']))
         try:
-            await bot.send_message(target_user['telegram_id'], LEXICON_RU["msg_admin_notified_user"].format(admin_username=admin_user.username, action_word=action_word, amount=format_amount(abs(amount)), currency_symbol=CURRENCY_SYMBOL, comment=comment))
+            await bot.send_message(
+                target_user['telegram_id'],
+                LEXICON_RU["msg_admin_notified_user"].format(
+                    admin_username=escape(admin_user.username or f"user{admin_user.id}"),
+                    action_word=action_word,
+                    amount=format_amount(abs(amount)),
+                    currency_symbol=CURRENCY_SYMBOL,
+                    comment=escape(comment or "")
+                )
+            )
         except Exception as e:
             logger.warning(f"Could not send notification to user {target_user['telegram_id']}: {e}")
     except Exception as e:

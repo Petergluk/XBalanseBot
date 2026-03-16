@@ -12,7 +12,7 @@
   - Это исправляет баг, из-за которого планировщик не мог обработать наступившее событие и оно считалось прошедшим.
 """
 import logging
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 from aiogram import Bot
@@ -182,7 +182,8 @@ def get_next_run_time(
     event_date: datetime | None, 
     weekday_val: str | int | None, 
     event_time: time | None,
-    last_run: datetime | None = None
+    last_run: datetime | None = None,
+    end_date: date | None = None,
 ) -> datetime | None:
     """
     Вычисляет следующую дату и время для события на основе его типа и расписания.
@@ -221,6 +222,8 @@ def get_next_run_time(
 
         if min_days_ahead != -1:
             target_date = now.date() + timedelta(days=min_days_ahead)
+            if end_date and target_date > end_date:
+                return None
             best_target_dt = datetime.combine(target_date, event_time).replace(tzinfo=MOSCOW_TZ)
             return best_target_dt
 

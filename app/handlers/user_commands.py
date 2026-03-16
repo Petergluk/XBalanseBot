@@ -17,6 +17,7 @@
 import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from html import escape
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
@@ -301,7 +302,7 @@ async def process_comment_input(message: Message, state: FSMContext):
     
     confirmation_text = LEXICON_RU["msg_transfer_confirm"].format(
         recipient_username=recipient_username, amount=format_amount(amount),
-        currency_symbol=CURRENCY_SYMBOL, comment=message.text
+        currency_symbol=CURRENCY_SYMBOL, comment=escape(message.text or "")
     )
     
     await state.set_state(TransferStates.waiting_for_confirmation)
@@ -350,13 +351,27 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
         logger.info(f"Transfer successful: {sender.id} -> {recipient['telegram_id']}, amount: {amount}")
         await db.handle_debt_repayment(recipient['id'])
 
-        response_text = LEXICON_RU["msg_transfer_success"].format(recipient_username=recipient['username'], amount=format_amount(amount), currency_symbol=CURRENCY_SYMBOL, comment=comment)
+        response_text = LEXICON_RU["msg_transfer_success"].format(
+            recipient_username=recipient['username'],
+            amount=format_amount(amount),
+            currency_symbol=CURRENCY_SYMBOL,
+            comment=escape(comment or "")
+        )
         await bot.send_message(chat_id, response_text, parse_mode="HTML")
         
         if recipient['telegram_id'] != 0:
             try:
-                sender_username = sender.username or f"user{sender.id}"
-                await bot.send_message(recipient['telegram_id'], LEXICON_RU["msg_transfer_received"].format(sender_username=sender_username, amount=format_amount(amount), currency_symbol=CURRENCY_SYMBOL, comment=comment), parse_mode="HTML")
+                sender_username = escape(sender.username or f"user{sender.id}")
+                await bot.send_message(
+                    recipient['telegram_id'],
+                    LEXICON_RU["msg_transfer_received"].format(
+                        sender_username=sender_username,
+                        amount=format_amount(amount),
+                        currency_symbol=CURRENCY_SYMBOL,
+                        comment=escape(comment or "")
+                    ),
+                    parse_mode="HTML"
+                )
             except Exception as e:
                 logger.warning(f"Could not send notification to recipient {recipient['telegram_id']}: {e}")
 

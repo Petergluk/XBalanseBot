@@ -85,12 +85,6 @@ async def _process_message(message: Message):
     user_id = message.from_user.id
     message_id = message.message_id
 
-    # Пост уже был награждён?
-    existing = await db.get_rewarded_message(message_id)
-    if existing:
-        logger.debug(f"Message {message_id} already rewarded, skipping")
-        return
-
     # Суточный лимит
     daily_limit = matched_rule['daily_limit']
     if daily_limit > 0:
@@ -102,8 +96,10 @@ async def _process_message(message: Message):
     # Начисляем!
     reward = Decimal(str(matched_rule['reward']))
     comment = f"Бонус за #{matched_rule['hashtag']}"
-    await db.award_tag_reward(user_id, reward, comment)
-    await db.log_tag_reward(user_id, message_id, matched_rule['id'])
+    awarded = await db.award_tag_reward_once(user_id, message_id, matched_rule['id'], reward, comment)
+    if not awarded:
+        logger.debug(f"Message {message_id} already rewarded (race-safe check), skipping")
+        return
     logger.info(f"Tag reward: user {user_id} got {reward} for #{matched_rule['hashtag']} (msg {message_id})")
 
     # Реакция на пост

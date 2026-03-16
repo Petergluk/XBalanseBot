@@ -177,7 +177,11 @@ class Database:
                 received = (await cur.fetchone())[0]
                 
                 # Списано системой (демерредж, оплата событий)
-                await cur.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE from_user_id = %s AND to_user_id IS NULL", (user['id'],))
+                await cur.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM transactions "
+                    "WHERE from_user_id = %s AND (to_user_id IS NULL OR to_user_id = 0)",
+                    (user['id'],)
+                )
                 deducted = (await cur.fetchone())[0]
                 
         return {
@@ -240,13 +244,20 @@ class Database:
                 result = await cur.fetchone()
                 return result[0] if result else 0
 
-    async def update_activity(self, activity_id: int, name: str = None, description: str = None, end_date: date = None, allow_manual_registration: bool = None):
+    async def update_activity(
+        self,
+        activity_id: int,
+        name: str = None,
+        description: str = None,
+        end_date: Any = ...,
+        allow_manual_registration: bool = None
+    ):
         async with self.pool.connection() as conn:
             if name is not None:
                 await conn.execute("UPDATE activities SET name = %s WHERE id = %s", (name, activity_id))
             if description is not None:
                 await conn.execute("UPDATE activities SET description = %s WHERE id = %s", (description, activity_id))
-            if end_date is not None or (isinstance(end_date, type(None))):
+            if end_date is not ...:
                 await conn.execute("UPDATE activities SET end_date = %s WHERE id = %s", (end_date, activity_id))
             if allow_manual_registration is not None:
                 await conn.execute("UPDATE activities SET allow_manual_registration = %s WHERE id = %s", (allow_manual_registration, activity_id))
@@ -487,13 +498,6 @@ class Database:
             logger.error(f"Could not parse welcome_bonus_amount '{bonus_amount_str}': {e}")
             return Decimal('0')
 
-    async def get_all_users(self) -> List[Dict[str, Any]]:
-        """Возвращает всех пользователей."""
-        async with self.pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute("SELECT * FROM users ORDER BY balance DESC")
-                return await cur.fetchall()
-
     async def get_users_by_ids(self, user_ids: list) -> list:
         """Возвращает полные данные пользователей по списку ID."""
         if not user_ids:
@@ -587,6 +591,47 @@ class Database:
                     (user['id'], reward, comment)
                 )
                 await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE telegram_id = %s", (telegram_id,))
+
+    async def award_tag_reward_once(
+        self,
+        user_telegram_id: int,
+        message_id: int,
+        rule_id: int,
+        reward,
+        comment: str
+    ) -> bool:
+        """
+        Атомарно логирует сообщение и начисляет награду только один раз.
+        Возвращает True, если начисление выполнено; False, если сообщение уже обработано.
+        """
+        user = await self.get_user(telegram_id=user_telegram_id)
+        if not user:
+            return False
+
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                log_cursor = await conn.execute(
+                    """
+                    INSERT INTO tag_rewards_log (user_telegram_id, message_id, rule_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (message_id) DO NOTHING
+                    RETURNING id
+                    """,
+                    (user_telegram_id, message_id, rule_id),
+                )
+                log_row = await log_cursor.fetchone()
+                if not log_row:
+                    return False
+
+                await conn.execute(
+                    "UPDATE users SET balance = balance + %s, transaction_count = transaction_count + 1 WHERE telegram_id = %s",
+                    (reward, user_telegram_id),
+                )
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'tag_reward', %s)",
+                    (user['id'], reward, comment),
+                )
+                return True
 
 
 db = Database(CONNINFO)

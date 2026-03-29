@@ -208,7 +208,8 @@ LEXICON_RU: dict[str, str] = {
     "btn_yes_delete": "✅ Да, удалить",
     "btn_save": "✅ Сохранить",
     
-    # === Обучение / События / Активности ===
+    # === Обучение / События / Активности (Создание и Редактирование) ===
+    # Текст-подсказка со списком переменных для шаблона напоминания о событии
     "msg_event_reminder_vars_help": (
         "<b>Доступные переменные:</b>\n"
         "<code>{event_name}</code> - название события\n"
@@ -220,11 +221,16 @@ LEXICON_RU: dict[str, str] = {
         "<code>{reminder_minutes}</code> - за сколько минут напоминание\n"
         "<code>{link}</code> - ссылка на событие\n"
     ),
+    # Сообщения для списков событий
     "msg_events_none_soon": "В ближайшее время событий не запланировано.",
     "msg_events_none_this_week": "На ближайшую неделю событий не запланировано.",
     "msg_events_this_week_header": "📅 События на ближайшие 7 дней (время указывается в MSK):",
+    
+    # Форматирование расписания событий в тексте
     "msg_event_schedule_recurring_next": "📅 Регулярность: {weekdays}\n📅 Следующее: {next_date_str} ({msk_label})",
     "msg_event_schedule_recurring_only": "📅 Регулярность: {weekdays} в {time_str} ({msk_label})",
+    
+    # Детальный просмотр карточки события
     "msg_event_view_details": (
         "<b>{event_name}</b>\n\n"
         "<i>{event_description}</i>\n\n"
@@ -234,12 +240,16 @@ LEXICON_RU: dict[str, str] = {
     ),
     "msg_event_ask_activity": "К какой активности относится событие?",
     "msg_event_ask_name": "Введите название для события. Отправьте `.` чтобы использовать название активности.\n\n*Для отмены введите /cancel*",
+    
+    # Запрос описания события. Переменная {activity_desc} показывает описание родительской активности
     "msg_event_ask_description": (
         "Отлично! Теперь введите описание для события.\n\n"
         "<i>Описание активности для справки:</i>\n<code>{activity_desc}</code>\n\n"
         "Для отмены введите /cancel"
     ),
     "btn_use_activity_desc": "Использовать описание активности",
+    
+    # Запросы типа и даты события
     "msg_event_ask_type": "Выберите тип события:",
     "btn_event_type_single": "Разовое",
     "btn_event_type_recurring": "Регулярное",
@@ -248,6 +258,8 @@ LEXICON_RU: dict[str, str] = {
     "msg_event_ask_cost": "Отлично. Теперь введите стоимость участия (число, 0 для бесплатного).\n\n*Для отмены введите /cancel*",
     "err_event_date_past": "❌ Нельзя создать событие в прошлом. Пожалуйста, введите будущую дату и время (MSK).",
     "err_event_invalid_date_format": "❌ Неверный формат. Введите дату и время в формате <b>ДД.ММ.ГГГГ ЧЧ:ММ</b> (MSK).",
+    
+    # Регулярные события
     "err_event_no_weekdays_selected": "Выберите хотя бы один день!",
     "msg_event_ask_time_recurring": "Вы выбрали: <b>{weekdays}</b>.\nТеперь введите время в формате <b>ЧЧ:ММ</b> (MSK).",
     "err_event_invalid_time_format": "❌ Неверный формат. Введите время в формате <b>ЧЧ:ММ</b> (MSK).",
@@ -286,6 +298,8 @@ LEXICON_RU: dict[str, str] = {
     ),
     "msg_event_created_success": "✅ Событие успешно создано и запланировано (ID: {event_id}).",
     "err_event_already_deleted": "Событие уже удалено.",
+    
+    # Редактирование события администратором
     "msg_event_edit_menu": "<b>📝 Редактирование события:</b>\n<code>{event_name}</code>\n\nЧто вы хотите изменить?",
     "msg_event_delete_confirm": "Вы уверены, что хотите удалить событие «<b>{event_name}</b>»?\n\nЭто действие необратимо.",
     "msg_event_deleted": "✅ Событие «<b>{event_name}</b>» успешно удалено.",
@@ -346,6 +360,7 @@ LEXICON_RU: dict[str, str] = {
     "msg_activity_upcoming_events": "<b>Ближайшие события:</b>",
     "msg_activity_no_events": "\n\n<i>В этом направлении пока нет запланированных событий.</i>",
     
+    # Ошибки и рассылки по событиям
     "err_event_not_found": "Событие не найдено.",
     "msg_event_no_future_runs": "У этого события нет запланированных запусков в будущем.",
     "msg_event_schedule_not_determined": "Не определено",
@@ -381,7 +396,7 @@ LEXICON_RU: dict[str, str] = {
     "msg_activity_deleted": "✅ Активность «{activity_name}» была удалена.",
     "btn_activity_create_event": "Создать событие для этой активности",
     
-    # === Активности ===
+    # === Инлайн кнопки и тексты для управления Активностями ===
     "text_general_events": "ОБЩИЕ СОБЫТИЯ",
     "btn_create_activity": "➕ Создать новую активность",
     "btn_edit_activities_desc": "📝 Изменить описание раздела",
@@ -396,7 +411,8 @@ LEXICON_RU: dict[str, str] = {
     "btn_delete_activity": "🗑️ Удалить активность",
     "btn_back_to_activity_view": "⬅️ Назад к просмотру",
     
-    # === События ===
+    # === Инлайн кнопки и разделы для управления Событиями ===
+    # Кнопки записи на событие:
     "btn_registered_manual": "✅ Вы записаны на {date_str} (Отменить)",
     "btn_registered_auto": "✅ Авто-запись на {date_str} (Отменить)",
     "btn_register_event": "➕ Записаться на {date_str}",
@@ -441,8 +457,8 @@ LEXICON_RU: dict[str, str] = {
     "err_broadcast_past_datetime": "❌ Это время уже прошло. Введите будущую дату и время.",
     "err_broadcast_invalid_datetime": "❌ Неверный формат. Введите дату и время: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>",
     
-    # === Настройки ===
-    # === Тег-награды ===
+    # === Настройки Системы ===
+    # === Тег-награды (Начисления за хэштеги в группе) ===
     "msg_tag_reward_default_dm": (
         "🏅 <b>Начислено!</b>\n\n"
         "За пост с #{hashtag} вам начислено <b>{amount} {currency_symbol}</b>.\n"
@@ -482,6 +498,8 @@ LEXICON_RU: dict[str, str] = {
     "msg_tag_rule_deleted": "✅ Правило <code>{rule_id}</code> удалено.",
     "err_tag_rule_not_found": "❌ Правило с таким ID не найдено.",
     "msg_get_thread_id": "🧵 Этот топик/тема: <code>{thread_id}</code>",
+    
+    # Настройки администратора (Меню /settings)
     "btn_menu_demurrage": "📉 Настройки демерреджа",
     "btn_menu_welcome_group": "👋 Приветствие в группе",
     "btn_back": "⬅️ Назад",
@@ -581,7 +599,8 @@ LEXICON_RU: dict[str, str] = {
         "• В фонде сообщества: {fund_balance} {currency_symbol}"
     ),
 
-    # === Администрирование ===
+    # === Администрирование (Команды администратора) ===
+    # Ошибки прав доступа
     "err_no_admin_rights": "❌ У вас нет прав для выполнения этой команды.",
     "err_no_admin_rights_alert": "❌ У вас нет прав для этого действия.",
     "err_admin_format": "❌ Неверный формат. Используйте:\n`{command} @username сумма [комментарий]`",
@@ -610,7 +629,7 @@ LEXICON_RU: dict[str, str] = {
     "msg_admin_status_changed": "✅ Пользователь @{username} {action} администратором.",
     "msg_admin_settings_menu": "⚙️ <b>Меню настроек системы</b>",
     
-    # Промпты настроек
+    # Промпты для редактирования настроек администратором (вызываются при клике на параметры в меню настроек)
     "msg_admin_prompt_set_welcome_bonus": "Введите новую сумму welcome-бонуса",
     "msg_admin_prompt_set_exchange_rate": "Введите новый курс обмена (например, 1.0)",
     "msg_admin_prompt_set_demurrage_rate": "Введите новый процент демерреджа (например, 1.5 для 1.5%)",

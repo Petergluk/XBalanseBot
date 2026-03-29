@@ -118,11 +118,11 @@ async def get_activities_keyboard(activities: list, user_subscriptions_ids: set,
         display_name = activity['name']
         if activity['id'] == 1:
             display_name = LEXICON_RU["text_general_events"]
-            icon = "✅ " if is_subscribed else ""
-            button_text = f"{icon}{display_name}"
+            icon = "✅" if is_subscribed else "📢"
+            button_text = f"{icon} {display_name}"
         else:
             base_icon = ACTIVITY_ICONS[activity['id'] % len(ACTIVITY_ICONS)]
-            icon = f"✅ {base_icon}" if is_subscribed else base_icon
+            icon = "✅" if is_subscribed else base_icon
             button_text = f"{icon} {display_name}"
             
         builder.row(InlineKeyboardButton(text=button_text, callback_data=ActivityAction(action="view", activity_id=activity['id']).pack()))

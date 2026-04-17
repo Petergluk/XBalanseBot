@@ -35,7 +35,7 @@ from app.keyboards import (get_back_to_menu_keyboard, get_main_menu_keyboard,
 from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
-                       get_user_balance, is_admin, is_user_in_group)
+                       get_user_balance, is_admin, validate_amount)
 from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
@@ -103,8 +103,6 @@ async def show_main_menu(message: Message | CallbackQuery):
 
 @router.message(Command("menu", ignore_case=True))
 async def cmd_menu(message: Message):
-    if not await is_user_in_group(message.bot, message.from_user.id):
-        return
     await show_main_menu(message)
 
 @router.callback_query(GeneralAction.filter(F.action == "main_menu"))
@@ -192,13 +190,12 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
             await message.reply(LEXICON_RU["err_transfer_self"])
             return
         try:
-            amount = Decimal(args[2])
-            if amount <= 0: raise ValueError
-        except (InvalidOperation, ValueError):
+            amount = validate_amount(args[2])
+        except ValueError:
             await message.reply(LEXICON_RU["err_transfer_invalid_amount"])
             return
         recipient = await db.get_user(username=recipient_username)
-        if not recipient or (recipient['telegram_id'] != 0 and not await is_user_in_group(bot, recipient['telegram_id'])):
+        if not recipient:
             await message.reply(LEXICON_RU["err_user_not_found"].format(recipient_username=recipient_username))
             return
         comment = ' '.join(args[3:]) if len(args) > 3 else "Перевод"
@@ -223,6 +220,12 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
     message_ids = data.get('message_ids', [])
     message_ids.append(message.message_id)
 
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        from app.handlers.user_commands import cancel_transfer_dialog
+        await cancel_transfer_dialog(message, state, bot)
+        return
+
     recipient_username = message.text.lstrip('@').lower()
     if recipient_username == (message.from_user.username or '').lower():
         sent_message = await message.reply(LEXICON_RU["err_transfer_self_dialog"])
@@ -231,7 +234,7 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
         return
 
     recipient = await db.get_user(username=recipient_username)
-    if not recipient or (recipient['telegram_id'] != 0 and not await is_user_in_group(bot, recipient['telegram_id'])):
+    if not recipient:
         sent_message = await message.reply(LEXICON_RU["err_user_not_found_dialog"].format(recipient_username=recipient_username))
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
@@ -253,10 +256,15 @@ async def process_amount_input(message: Message, state: FSMContext):
     message_ids = data.get('message_ids', [])
     message_ids.append(message.message_id)
     
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        from app.handlers.user_commands import cancel_transfer_dialog
+        await cancel_transfer_dialog(message, state, message.bot)
+        return
+    
     try:
-        amount = Decimal(message.text.replace(',', '.'))
-        if amount <= 0: raise ValueError
-    except (InvalidOperation, ValueError):
+        amount = validate_amount(message.text)
+    except ValueError:
         from app.keyboards import get_back_to_menu_keyboard
         sent_message = await message.reply(
             LEXICON_RU["err_transfer_invalid_amount_dialog"],
@@ -293,6 +301,12 @@ async def process_comment_input(message: Message, state: FSMContext):
     data = await state.get_data()
     message_ids = data.get('message_ids', [])
     message_ids.append(message.message_id)
+    
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        from app.handlers.user_commands import cancel_transfer_dialog
+        await cancel_transfer_dialog(message, state, message.bot)
+        return
     
     await state.update_data(comment=message.text)
     

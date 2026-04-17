@@ -27,6 +27,7 @@
 - УЛУЧШЕНИЕ (Предыдущее): Сохранено изменение заголовка "События:" на "Ближайшие события:".
 """
 import logging
+import asyncio
 from datetime import datetime, date
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -43,7 +44,7 @@ from app.keyboards import (
 from app.states import ActivityCreationStates, ActivityEditStates, BroadcastStates
 from app.database import db
 from app.utils import is_admin, format_amount, get_next_run_time
-from app.config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL, GENERAL_ACTIVITY_ID
 from app.lexicon import LEXICON_RU
 from app.callbacks import (
     GeneralAction, ActivityAction, ActivityEditAction, EventAction,
@@ -89,8 +90,8 @@ async def show_activities_list(target: Message | CallbackQuery):
         try:
             if target.message:
                 await target.message.edit_text(explanation_text, reply_markup=keyboard, parse_mode="HTML")
-        except TelegramBadRequest:
-            pass
+        except TelegramBadRequest as e:
+            logger.debug(f"Message not modified on show_activities_list: {e}")
         await target.answer()
 
 async def _send_activity_details_message(target: Message | CallbackQuery, activity_id: int):
@@ -113,7 +114,7 @@ async def _send_activity_details_message(target: Message | CallbackQuery, activi
 
     text = LEXICON_RU["msg_activity_details_header"].format(name=activity['name'], description=activity['description'] or LEXICON_RU["msg_activity_no_description"])
     
-    if activity_id == 1:
+    if activity_id == GENERAL_ACTIVITY_ID:
         text = LEXICON_RU["msg_activity_general_events_desc"]
 
     text += LEXICON_RU["msg_activity_upcoming_events"]
@@ -305,10 +306,18 @@ async def process_activity_subscription(callback: CallbackQuery, callback_data: 
 
     if callback_data.action == "subscribe":
         await db.add_subscription(user_id, activity_id)
-        await callback.answer(LEXICON_RU["msg_activity_subscribed"].format(activity_name=activity['name']), show_alert=True)
+        await callback.answer(LEXICON_RU["msg_activity_subscribed"].format(activity_name=activity['name']))
     else: # action == "unsubscribe"
         await db.remove_subscription(user_id, activity_id)
-        await callback.answer(LEXICON_RU["msg_activity_unsubscribed"].format(activity_name=activity['name']), show_alert=True)
+        await callback.answer(LEXICON_RU["msg_activity_unsubscribed"].format(activity_name=activity['name']))
+        # Undo message
+        undo_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="↩️ Вернуть подписку", callback_data=ActivityAction(action="subscribe", activity_id=activity_id).pack())
+        ]])
+        await callback.message.answer(
+            f"Вы успешно отписались от <b>{activity['name']}</b>.", 
+            reply_markup=undo_kb, parse_mode="HTML"
+        )
 
     await _send_activity_details_message(callback, activity_id)
 
@@ -337,7 +346,7 @@ async def process_manual_registration(callback: CallbackQuery, callback_data: Ev
             await db.remove_event_override(user_telegram_id, event_id, event_date)
         else:
             await db.set_event_override(user_telegram_id, event_id, event_date, 'registered')
-        await callback.answer(LEXICON_RU["msg_event_registered"], show_alert=True)
+        await callback.answer(LEXICON_RU["msg_event_registered"])
 
     else: # action == "cancel"
         is_subscribed = await db.is_user_subscribed(user_telegram_id, event['activity_id'])
@@ -345,7 +354,15 @@ async def process_manual_registration(callback: CallbackQuery, callback_data: Ev
             await db.set_event_override(user_telegram_id, event_id, event_date, 'unregistered')
         else:
             await db.remove_event_override(user_telegram_id, event_id, event_date)
-        await callback.answer(LEXICON_RU["msg_event_registration_cancelled"], show_alert=True)
+        await callback.answer(LEXICON_RU["msg_event_registration_cancelled"])
+        # Undo message
+        undo_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="↩️ Вернуть регистрацию", callback_data=EventAction(action="register", event_id=event_id, target_date=event_date).pack())
+        ]])
+        await callback.message.answer(
+            f"Вы отменили участие в <b>{event['name'] or event['activity_name']}</b> на {event_date.strftime('%d.%m.%Y')}.", 
+            reply_markup=undo_kb, parse_mode="HTML"
+        )
 
     # Обновляем карточку события в том же "activity"-контексте.
     await _view_event_from_activity(callback, EventAction(action="view_in_activity", event_id=event_id))
@@ -481,7 +498,7 @@ async def update_activity_description(message: Message, state: FSMContext):
 async def confirm_activity_deletion(callback: CallbackQuery, callback_data: ActivityEditAction):
     """Показывает подтверждение удаления активности."""
     activity_id = callback_data.activity_id
-    if activity_id == 1:
+    if activity_id == GENERAL_ACTIVITY_ID:
         await callback.answer(LEXICON_RU["err_activity_cannot_delete"], show_alert=True)
         return
 
@@ -518,13 +535,19 @@ async def process_activity_deletion(callback: CallbackQuery, callback_data: Conf
 
 async def _do_broadcast(bot, activity_id: int, source_chat_id: int, source_message_id: int, admin_chat_id: int):
     """Вспомогательная корутина: делает рассылку и сообщает администратору о результате."""
-    if activity_id == 1:
+    if activity_id == GENERAL_ACTIVITY_ID:
         # Общие события — рассылаем всем пользователям
         recipients = await db.get_all_users()
     else:
         recipients = await db.get_activity_subscribers(activity_id)
 
     total = len(recipients)
+    
+    status_msg = await bot.send_message(
+        chat_id=admin_chat_id,
+        text=f"🔄 Запуск рассылки для {total} пользователей..."
+    )
+    
     success = 0
     for user in recipients:
         telegram_id = user.get('telegram_id')
@@ -537,13 +560,13 @@ async def _do_broadcast(bot, activity_id: int, source_chat_id: int, source_messa
                 message_id=source_message_id
             )
             success += 1
+            await asyncio.sleep(0.05)  # Защита от Flood Control (макс 20 сообщений/сек)
         except Exception as e:
             logger.warning(f"Broadcast: could not send to {telegram_id}: {e}")
 
     logger.info(f"Broadcast for activity {activity_id}: {success}/{total} delivered.")
-    await bot.send_message(
-        chat_id=admin_chat_id,
-        text=LEXICON_RU["msg_broadcast_done"].format(success=success, total=total)
+    await status_msg.edit_text(
+        LEXICON_RU["msg_broadcast_done"].format(success=success, total=total)
     )
 
 
@@ -561,7 +584,7 @@ async def handle_broadcast_start(callback: CallbackQuery, state: FSMContext, cal
         return
 
     # Для общей активности считаем всех пользователей, иначе — подписчиков
-    if activity_id == 1:
+    if activity_id == GENERAL_ACTIVITY_ID:
         recipients = await db.get_all_users()
     else:
         recipients = await db.get_activity_subscribers(activity_id)

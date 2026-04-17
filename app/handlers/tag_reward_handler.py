@@ -14,28 +14,49 @@ from decimal import Decimal
 
 from aiogram import Bot, F, Router
 from aiogram.types import Message, ReactionTypeEmoji
+from aiogram.exceptions import TelegramBadRequest
 
-from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
+from redis.asyncio import Redis
+from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID, REDIS_URL
 from app.database import db
 from app.lexicon import LEXICON_RU
 from app.utils import format_amount
+import json
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Простой кеш правил: (rules, loaded_at)
-_rules_cache: tuple = ([], None)
-_CACHE_TTL_SECONDS = 60
+_redis_client = None
 
+def get_redis_client() -> Redis:
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+    return _redis_client
+
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return str(obj)
+        if hasattr(obj, 'isoformat'):
+            return obj.isoformat()
+        return super().default(obj)
 
 async def _get_rules():
-    global _rules_cache
-    rules, loaded_at = _rules_cache
-    now = datetime.now()
-    if loaded_at is None or (now - loaded_at).total_seconds() > _CACHE_TTL_SECONDS:
+    try:
+        redis = get_redis_client()
+        cache_key = "xblns:tag_rules_cache"
+        cached = await redis.get(cache_key)
+        
+        if cached:
+            return json.loads(cached)
+            
         rules = await db.get_active_tag_rules()
-        _rules_cache = (rules, now)
-    return rules
+        await redis.setex(cache_key, 60, json.dumps(rules, cls=CustomJSONEncoder))
+        return rules
+    except Exception as e:
+        logger.warning(f"Redis cache error {e}. Falling back to DB for tag rules.")
+        return await db.get_active_tag_rules()
 
 
 def _extract_hashtags(text: str) -> set[str]:
@@ -85,20 +106,16 @@ async def _process_message(message: Message):
     user_id = message.from_user.id
     message_id = message.message_id
 
-    # Суточный лимит
-    daily_limit = matched_rule['daily_limit']
-    if daily_limit > 0:
-        today_count = await db.count_today_tag_rewards(user_id, matched_rule['id'])
-        if today_count >= daily_limit:
-            logger.debug(f"User {user_id} hit daily limit ({daily_limit}) for rule {matched_rule['id']}")
-            return
+    # Лимит за период
+    limit_amount = matched_rule.get('limit_amount', 0)
+    limit_period_days = matched_rule.get('limit_period_days', 1)
 
     # Начисляем!
     reward = Decimal(str(matched_rule['reward']))
     comment = f"Бонус за #{matched_rule['hashtag']}"
-    awarded = await db.award_tag_reward_once(user_id, message_id, matched_rule['id'], reward, comment)
+    awarded = await db.award_tag_reward_once(user_id, message_id, matched_rule['id'], reward, comment, limit_amount, limit_period_days)
     if not awarded:
-        logger.debug(f"Message {message_id} already rewarded (race-safe check), skipping")
+        logger.debug(f"Message {message_id} already rewarded or daily limit hit, skipping")
         return
     logger.info(f"Tag reward: user {user_id} got {reward} for #{matched_rule['hashtag']} (msg {message_id})")
 
@@ -106,6 +123,8 @@ async def _process_message(message: Message):
     emoji = matched_rule.get('reaction') or '🏅'
     try:
         await message.react([ReactionTypeEmoji(emoji=emoji)])
+    except TelegramBadRequest as e:
+        logger.debug(f"Could not set reaction (possibly unsupported or no rights): {e}")
     except Exception as e:
         logger.warning(f"Could not set reaction: {e}")
 

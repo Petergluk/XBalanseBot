@@ -12,8 +12,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from app.database import db
-from app.utils import format_amount, ensure_user_exists, is_user_in_group
-from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET
+from app.utils import format_amount, ensure_user_exists
+from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET, WEBHOOK_SECRET_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +73,6 @@ async def handle_tribute_webhook(request: web.Request):
             payload_canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             payment_ref = f"tribute:hash:{hashlib.sha256(payload_canonical.encode('utf-8')).hexdigest()}"
             logger.warning("Tribute webhook has no payment id. Using payload hash as idempotency key.")
-
-        if not await is_user_in_group(bot, telegram_id):
-            logger.warning(f"User {telegram_id} from webhook is not in the main group.")
-            return web.Response(status=200, text="OK (user not in group)")
 
         await ensure_user_exists(telegram_id, username, is_bot=False)
 
@@ -157,7 +153,10 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher):
     app = web.Application()
     app['bot'] = bot
     
-    handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    if WEBHOOK_SECRET_TOKEN:
+        handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET_TOKEN)
+    else:
+        handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     handler.register(app, path="/webhook/telegram")
     
     app.router.add_post('/webhook/tribute', handle_tribute_webhook)

@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from app.database import db
 from app.utils import format_amount, get_next_run_time
-from app.config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL, GENERAL_ACTIVITY_ID, SYSTEM_FUND_USER_ID
 from app.lexicon import LEXICON_RU
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ async def _get_final_participants(event: dict, event_date: date) -> list:
     event_id = event['id']
 
     # 1. Базовый список подписчиков
-    if activity_id == 1:  # Общие события
+    if activity_id == GENERAL_ACTIVITY_ID:  # Общие события
         base_subscribers = await db.get_all_users()
     else:
         base_subscribers = await db.get_activity_subscribers(activity_id)
@@ -155,7 +155,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
         logger.info(f"Event {event['id']} has zero cost, skipping payments.")
         return
         
-    fund_user_id = 0
+    fund_user_id = SYSTEM_FUND_USER_ID
     
     async with db.pool.connection() as conn:
         async with conn.transaction():
@@ -271,28 +271,38 @@ async def process_demurrage(bot: Bot):
         async with db.pool.connection() as conn:
             async with conn.transaction():
                 async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute("SELECT id, balance FROM users WHERE balance > 0 AND telegram_id != 0")
+                    await cur.execute("SELECT id, balance FROM users WHERE balance > 0 AND telegram_id != 0 FOR UPDATE")
                     users_to_tax = await cur.fetchall()
 
                 if not users_to_tax:
                     logger.info("No users with positive balance found. Demurrage process finished.")
                     # return out of transaction safely, then save last_run
                 else:
-                    fund_user_id = 0
+                    fund_user_id = SYSTEM_FUND_USER_ID
+                    comment_text = f"Демерредж {rate*100}%"
+                    
+                    updates_to_run = []
+                    inserts_to_run = []
+                    
                     for user in users_to_tax:
                         demurrage_amount = (user['balance'] * rate).quantize(Decimal('0.0001'))
                         if demurrage_amount <= 0: 
                             continue
                         
-                        await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (demurrage_amount, user['id']))
-                        await conn.execute(
-                            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'demurrage', %s)",
-                            (user['id'], fund_user_id, demurrage_amount, f"Демерредж {rate*100}%")
-                        )
+                        updates_to_run.append((demurrage_amount, user['id']))
+                        inserts_to_run.append((user['id'], fund_user_id, demurrage_amount, "demurrage", comment_text))
+                        
                         total_demurrage += demurrage_amount
                         users_processed += 1
-                    
-                    if total_demurrage > 0:
+                        
+                    if updates_to_run:
+                        async with conn.cursor() as batch_cur:
+                            await batch_cur.executemany("UPDATE users SET balance = balance - %s WHERE id = %s", updates_to_run)
+                            await batch_cur.executemany(
+                                "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
+                                inserts_to_run
+                            )
+                        
                         await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (total_demurrage, fund_user_id))
         
         # Если транзакция не выбросила исключение, смело ставим дату последнего запуска

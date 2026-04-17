@@ -15,6 +15,9 @@ import logging
 import os
 from datetime import datetime, date, time
 from typing import Any, Dict, List, Optional
+import asyncio
+
+from app.config import GENERAL_ACTIVITY_ID, SYSTEM_FUND_USER_ID
 
 import psycopg
 from psycopg.rows import dict_row
@@ -46,13 +49,22 @@ class Database:
         self.conninfo = conninfo
         self.pool: Optional[AsyncConnectionPool] = None
 
-    async def initialize(self):
-        """Инициализирует пул соединений и структуру базы данных."""
+    async def initialize(self, max_retries: int = 5):
+        """Инициализирует пул соединений и структуру базы данных с повторными попытками."""
         logger.info("Initializing database connection pool...")
-        self.pool = AsyncConnectionPool(self.conninfo, open=False, max_size=10)
-        await self.pool.open()
-        logger.info("Connection pool opened successfully.")
-        await self.init_db()
+        for attempt in range(max_retries):
+            try:
+                self.pool = AsyncConnectionPool(self.conninfo, open=False, max_size=10)
+                await self.pool.open()
+                logger.info("Connection pool opened successfully.")
+                await self.init_db()
+                return
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error("Failed to initialize database after several attempts.")
+                    raise
+                logger.warning(f"Database connection failed, retrying in {2 ** attempt} seconds... ({e})")
+                await asyncio.sleep(2 ** attempt)
 
     async def close(self):
         """Закрывает пул соединений."""
@@ -229,8 +241,8 @@ class Database:
         async with self.pool.connection() as conn:
             user = await self.get_user(telegram_id=telegram_id)
             if user:
-                if activity_id == 1:
-                    logger.warning(f"User {telegram_id} tried to unsubscribe from system activity 1.")
+                if activity_id == GENERAL_ACTIVITY_ID:
+                    logger.warning(f"User {telegram_id} tried to unsubscribe from system activity {GENERAL_ACTIVITY_ID}.")
                     return
                 await conn.execute("DELETE FROM user_subscriptions WHERE user_id = %s AND activity_id = %s", (user['id'], activity_id))
 
@@ -296,22 +308,37 @@ class Database:
                 return await cur.fetchall()
 
     async def create_event(self, **kwargs) -> int:
+        valid_columns = {
+            'activity_id', 'name', 'description', 'event_type', 'cost', 
+            'link', 'reminder_time', 'reminder_text', 'created_by', 
+            'event_date', 'weekday', 'event_time', 'end_date', 'last_run', 'is_active'
+        }
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_columns}
+        if not filtered_kwargs:
+            return 0
+            
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
-                columns = ', '.join(kwargs.keys())
-                placeholders = ', '.join(['%s'] * len(kwargs))
+                columns = ', '.join(filtered_kwargs.keys())
+                placeholders = ', '.join(['%s'] * len(filtered_kwargs))
                 query = f"INSERT INTO events ({columns}) VALUES ({placeholders}) RETURNING id"
-                await cur.execute(query, tuple(kwargs.values()))
+                await cur.execute(query, tuple(filtered_kwargs.values()))
                 result = await cur.fetchone()
                 return result[0] if result else 0
 
     async def update_event(self, event_id: int, **kwargs):
+        valid_columns = {
+            'activity_id', 'name', 'description', 'event_type', 'cost', 
+            'link', 'reminder_time', 'reminder_text', 'created_by', 
+            'event_date', 'weekday', 'event_time', 'end_date', 'last_run', 'is_active'
+        }
         async with self.pool.connection() as conn:
             fields = []
             params = []
             for key, value in kwargs.items():
-                fields.append(f"{key} = %s")
-                params.append(value)
+                if key in valid_columns:
+                    fields.append(f"{key} = %s")
+                    params.append(value)
             if not fields: return
             params.append(event_id)
             query = f"UPDATE events SET {', '.join(fields)} WHERE id = %s"
@@ -405,16 +432,27 @@ class Database:
         async with self.pool.connection() as conn:
             async with conn.transaction():
                 result_cursor = await conn.execute(
-                    "SELECT id, balance FROM users WHERE telegram_id = %s FOR UPDATE",
+                    "SELECT id FROM users WHERE telegram_id = %s",
                     (sender_telegram_id,)
                 )
                 sender_row = await result_cursor.fetchone()
                 if not sender_row:
                     return {'success': False, 'error': 'sender_not_found'}
                 sender_db_id = sender_row[0]
-                sender_balance = Decimal(str(sender_row[1]))
+
+                # Lock both in order to prevent deadlocks
+                if sender_db_id != recipient_user_id:
+                    await conn.execute("SELECT id FROM users WHERE id IN (%s, %s) ORDER BY id FOR UPDATE", (sender_db_id, recipient_user_id))
+                else:
+                    await conn.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (sender_db_id,))
+
+                # Fetch balances after locking
+                result_cursor = await conn.execute("SELECT balance FROM users WHERE id = %s", (sender_db_id,))
+                sender_balance = Decimal(str((await result_cursor.fetchone())[0]))
+
                 if sender_balance < amount:
                     return {'success': False, 'error': 'insufficient_funds', 'sender_balance': sender_balance}
+                
                 await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (amount, sender_db_id))
                 await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, recipient_user_id))
                 await conn.execute(
@@ -482,17 +520,27 @@ class Database:
             if welcome_bonus <= 0:
                 return Decimal('0')
             async with self.pool.connection() as conn:
-                result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
-                user_row = await result_cursor.fetchone()
-                if user_row:
-                    user_id = user_row[0]
-                    await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (welcome_bonus, user_id))
-                    await conn.execute(
-                        "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'welcome_bonus', %s)",
-                        (user_id, welcome_bonus, comment)
-                    )
-                    await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user_id,))
-                    logger.info(f"Welcome bonus {welcome_bonus} credited to user {telegram_id}")
+                async with conn.transaction():
+                    result_cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = %s FOR UPDATE", (telegram_id,))
+                    user_row = await result_cursor.fetchone()
+                    if user_row:
+                        user_id = user_row[0]
+                        
+                        # Проверяем, начислен ли уже бонус, чтобы избежать race condition
+                        tx_cursor = await conn.execute(
+                            "SELECT 1 FROM transactions WHERE to_user_id = %s AND type = 'welcome_bonus'",
+                            (user_id,)
+                        )
+                        if await tx_cursor.fetchone():
+                            return Decimal('0')
+
+                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (welcome_bonus, user_id))
+                        await conn.execute(
+                            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'welcome_bonus', %s)",
+                            (SYSTEM_FUND_USER_ID, user_id, welcome_bonus, comment)
+                        )
+                        await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user_id,))
+                        logger.info(f"Welcome bonus {welcome_bonus} credited to user {telegram_id}")
             return welcome_bonus
         except (ValueError, TypeError) as e:
             logger.error(f"Could not parse welcome_bonus_amount '{bonus_amount_str}': {e}")
@@ -508,10 +556,24 @@ class Database:
                 return await cur.fetchall()
 
     async def get_all_users(self) -> List[Dict[str, Any]]:
-        """Возвращает всех пользователей (без фонда)."""
+        """Возвращает всех пользователей (без фонда). ОСТОРОЖНО: может загрузить память."""
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("SELECT * FROM users WHERE telegram_id != 0 ORDER BY id")
+                return await cur.fetchall()
+                
+    async def get_total_users_count(self) -> int:
+        """Возвращает общее количество пользователей (исключая фонд)."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM users WHERE telegram_id != 0")
+                return (await cur.fetchone())[0]
+                
+    async def get_users_page(self, limit: int, offset: int) -> List[Dict[str, Any]]:
+        """Возвращает список пользователей с лимитом и смещением."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM users WHERE telegram_id != 0 ORDER BY id LIMIT %s OFFSET %s", (limit, offset))
                 return await cur.fetchall()
 
     # --- TAG RULES ---
@@ -534,14 +596,15 @@ class Database:
                 await cur.execute("SELECT * FROM tag_rules WHERE id = %s", (rule_id,))
                 return await cur.fetchone()
 
-    async def create_tag_rule(self, hashtag: str, min_chars: int, reward, daily_limit: int,
-                               thread_id=None, group_msg=None, bot_msg=None, reaction: str = '🏅') -> int:
+    async def create_tag_rule(self, hashtag: str, min_chars: int, reward, limit_amount: int, limit_period_days: int,
+                              thread_id: Optional[int], group_msg: Optional[str], bot_msg: Optional[str],
+                              reaction: str) -> int:
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    """INSERT INTO tag_rules (hashtag, min_chars, reward, daily_limit, thread_id, group_msg, bot_msg, reaction)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (hashtag.lstrip('#').lower(), min_chars, reward, daily_limit, thread_id, group_msg, bot_msg, reaction)
+                    """INSERT INTO tag_rules (hashtag, min_chars, reward, limit_amount, limit_period_days, thread_id, group_msg, bot_msg, reaction)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    (hashtag.lstrip('#').lower(), min_chars, reward, limit_amount, limit_period_days, thread_id, group_msg, bot_msg, reaction)
                 )
                 row = await cur.fetchone()
                 return row[0] if row else 0
@@ -580,6 +643,8 @@ class Database:
 
     async def award_tag_reward(self, telegram_id: int, reward, comment: str):
         """Начисляет орфы пользователю за хэштег-пост (от фонда, тип manual_add)."""
+        from decimal import Decimal
+        reward = Decimal(str(reward))
         user = await self.get_user(telegram_id=telegram_id)
         if not user:
             return
@@ -598,18 +663,42 @@ class Database:
         message_id: int,
         rule_id: int,
         reward,
-        comment: str
+        comment: str,
+        limit_amount: int = 0,
+        limit_period_days: int = 1
     ) -> bool:
         """
         Атомарно логирует сообщение и начисляет награду только один раз.
         Возвращает True, если начисление выполнено; False, если сообщение уже обработано.
         """
+        from decimal import Decimal
+        reward = Decimal(str(reward))
         user = await self.get_user(telegram_id=user_telegram_id)
         if not user:
             return False
 
         async with self.pool.connection() as conn:
             async with conn.transaction():
+                # Блокируем пользователя, чтобы сериализовать награды и избежать гонки за лимитами
+                await conn.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user['id'],))
+                
+                if limit_amount > 0:
+                    query_params = [user_telegram_id, rule_id]
+                    if limit_period_days == 0:
+                        # 0 = за все время
+                        date_filter = ""
+                    else:
+                        date_filter = "AND rewarded_at >= (CURRENT_DATE - %s::interval)"
+                        query_params.append(f"{limit_period_days - 1} days")
+
+                    query = f"""SELECT COUNT(*) FROM tag_rewards_log
+                                WHERE user_telegram_id = %s AND rule_id = %s
+                                {date_filter}"""
+                    cur = await conn.execute(query, tuple(query_params))
+                    row = await cur.fetchone()
+                    if row and row[0] >= limit_amount:
+                        return False
+
                 log_cursor = await conn.execute(
                     """
                     INSERT INTO tag_rewards_log (user_telegram_id, message_id, rule_id)
@@ -628,8 +717,8 @@ class Database:
                     (reward, user_telegram_id),
                 )
                 await conn.execute(
-                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'tag_reward', %s)",
-                    (user['id'], reward, comment),
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'tag_reward', %s)",
+                    (SYSTEM_FUND_USER_ID, user['id'], reward, comment),
                 )
                 return True
 

@@ -45,7 +45,8 @@ env/
 
 # Файлы конфигурации
 .env
-.env.render
+.env.*
+*.env
 
 # Файлы IDE
 .idea/

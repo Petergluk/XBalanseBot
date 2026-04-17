@@ -29,8 +29,7 @@ from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
 from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers.user_commands import show_main_menu
-from app.utils import (ensure_user_exists, format_amount, is_admin,
-                       is_user_in_group)
+from app.utils import ensure_user_exists, format_amount, is_admin
 from app.callbacks import GeneralAction
 
 router = Router()
@@ -97,18 +96,20 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     logger.info(f"User {message.from_user.id} (@{message.from_user.username}) started bot")
     
-    is_in_group = await is_user_in_group(message.bot, message.from_user.id)
+    user = await db.get_user(telegram_id=message.from_user.id)
+    is_new = not bool(user)
+    
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     
     # Гарантируем права суперадмина при каждом /start
     from app.config import SUPER_ADMIN_ID
     if message.from_user.id == SUPER_ADMIN_ID:
-        user = await db.get_user(telegram_id=SUPER_ADMIN_ID)
-        if user and not user['is_admin']:
+        user_db = await db.get_user(telegram_id=SUPER_ADMIN_ID)
+        if user_db and not user_db['is_admin']:
             await db.set_admin_status(SUPER_ADMIN_ID, True)
             logger.info(f"Super admin {SUPER_ADMIN_ID} re-promoted via /start")
     
-    if is_in_group:
+    if not is_new:
         stats = await db.get_returning_user_stats(message.from_user.id)
         if stats and (stats['sent'] > 0 or stats['received'] > 0 or stats['deducted'] > 0):
             # Returning active user — show full stats greeting
@@ -131,13 +132,13 @@ async def cmd_start(message: Message, state: FSMContext):
             await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
         return
         
-    # Пользователь не в группе -> Начинаем онбординг
+    # Пользователь новый -> Начинаем онбординг
     welcome_text_template = await db.get_setting('welcome_message_bot', LEXICON_RU["default_welcome_bot"])
     welcome_text = welcome_text_template.replace('{username}', message.from_user.mention_html())
     
     from app.keyboards import get_onboarding_keyboard
     await message.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
-    logger.info(f"Sent onboarding message to user {message.from_user.id}")
+    logger.info(f"Sent onboarding message to new user {message.from_user.id}")
 
 @router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
 async def process_onboarding_agree(callback: CallbackQuery):
@@ -145,13 +146,34 @@ async def process_onboarding_agree(callback: CallbackQuery):
     await callback.answer()
     try:
         from app.config import MAIN_GROUP_ID
-        invite_link = await callback.bot.create_chat_invite_link(
+        import time
+        from app.handlers.tag_reward_handler import get_redis_client
+        
+        user_id = callback.from_user.id
+        redis = get_redis_client()
+        cache_key = f"invite_link:{user_id}"
+        cached_link = await redis.get(cache_key)
+        
+        if cached_link:
+            await callback.message.edit_text(
+                LEXICON_RU["msg_invite_link"].format(invite_link=cached_link),
+                reply_markup=None,
+                disable_web_page_preview=True
+            )
+            return
+
+        expire_date = int(time.time()) + 86400  # 24 hours
+        invite_link_obj = await callback.bot.create_chat_invite_link(
             chat_id=MAIN_GROUP_ID, 
             member_limit=1,
+            expire_date=expire_date,
             name=f"Invite for {callback.from_user.full_name}"
         )
+        
+        await redis.setex(cache_key, 86400, invite_link_obj.invite_link)
+        
         await callback.message.edit_text(
-            LEXICON_RU["msg_invite_link"].format(invite_link=invite_link.invite_link),
+            LEXICON_RU["msg_invite_link"].format(invite_link=invite_link_obj.invite_link),
             reply_markup=None,
             disable_web_page_preview=True
         )

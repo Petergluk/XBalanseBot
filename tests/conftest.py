@@ -66,11 +66,7 @@ async def _ensure_test_database_exists():
         print(f"✅ Alembic migrations applied to {test_db}")
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+
 
 
 @pytest.fixture(scope="session", autouse=True)

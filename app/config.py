@@ -32,6 +32,7 @@ POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 
 # --- Настройки Redis ---
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+REDIS_URL = os.environ.get("REDIS_URL")
 
 CURRENCY_SYMBOL = "Ӫ"
 
@@ -39,10 +40,15 @@ CURRENCY_SYMBOL = "Ӫ"
 WEB_SERVER_HOST = os.environ.get("WEB_SERVER_HOST", '0.0.0.0')
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 TRIBUTE_WEBHOOK_SECRET = os.environ.get("TRIBUTE_WEBHOOK_SECRET")
+WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN")
 
 
 # Переключатель режимов. По умолчанию - серверный (False).
 DEV_MODE = os.environ.get("DEV_MODE", "False").lower() in ('true', '1', 't')
+
+# --- Системные константы ---
+GENERAL_ACTIVITY_ID = 1
+SYSTEM_FUND_USER_ID = 0
 
 # --- Тексты по умолчанию ---
 

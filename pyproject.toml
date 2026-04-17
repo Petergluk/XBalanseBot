@@ -18,6 +18,7 @@ psycopg = {extras = ["binary", "pool"], version = "^3.1.18"}
 pydantic = "<2.9,>=2.4.1"
 alembic = "^1.13.1"
 redis = "^5.0.4"
+greenlet = "^3.3.2"
 
 
 [tool.poetry.group.dev.dependencies]

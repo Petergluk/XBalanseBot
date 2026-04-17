@@ -106,13 +106,14 @@ class BroadcastStates(StatesGroup):
 class TagRuleCreationStates(StatesGroup):
     """
     Состояния для FSM создания правила начисления по хэштегу.
-    data: `hashtag`, `min_chars`, `reward`, `daily_limit`, `thread_id`,
-          `group_msg`, `bot_msg`, `reaction`
+    data: `hashtag`, `min_chars`, `reward`, `limit_amount`, `limit_period_days`,
+          `thread_id`, `group_msg`, `bot_msg`, `reaction`
     """
     waiting_for_hashtag = State()
     waiting_for_min_chars = State()
     waiting_for_reward = State()
-    waiting_for_daily_limit = State()
+    waiting_for_limit_amount = State()
+    waiting_for_limit_period = State()
     waiting_for_thread_id = State()
     waiting_for_group_msg = State()
     waiting_for_bot_msg = State()

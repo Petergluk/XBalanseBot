@@ -13,7 +13,7 @@
 """
 import logging
 from datetime import datetime, timedelta, time, date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 from aiogram import Bot
 from app.config import MAIN_GROUP_ID, CURRENCY_SYMBOL, DEV_MODE
@@ -68,6 +68,20 @@ def format_amount(amount: Decimal) -> str:
         
     return s
 
+def validate_amount(text: str, max_value: Decimal = Decimal('1000000')) -> Decimal:
+    """
+    Парсит и валидирует денежную сумму с защитой от переполнений.
+    """
+    try:
+        amount = Decimal(text.replace(',', '.'))
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        if amount > max_value:
+            raise ValueError(f"Amount exceeds maximum {max_value}")
+        return amount
+    except (InvalidOperation, ValueError):
+        raise ValueError("Invalid amount format")
+
 def format_transactions_history(transactions: list, user_db_id: int) -> str:
     """
     Форматирует список транзакций в текстовый отчет по категориям.
@@ -94,11 +108,14 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
             elif tx['type'] in ('demurrage', 'manual_rem'):
                 system_debits.append(tx)
 
+    import html
     def format_tx_line(tx, sign, prefix="", peer_name=""):
         date_str = tx['created_at'].strftime('%d.%m %H:%M')
         amount_str = format_amount(Decimal(str(tx['amount'])))
-        comment = f" ({tx['comment']})" if tx['comment'] else ""
-        return f"  {sign} {amount_str} {prefix}{peer_name}{comment} - {date_str}\n"
+        safe_comment = html.escape(tx['comment']) if tx['comment'] else ""
+        safe_peer = html.escape(peer_name) if peer_name else ""
+        comment = f" ({safe_comment})" if safe_comment else ""
+        return f"  {sign} {amount_str} {prefix}{safe_peer}{comment} - {date_str}\n"
 
     if top_ups:
         response_parts.append("\n\n💰 <b>Пополнения:</b>\n")
@@ -140,19 +157,7 @@ async def is_admin(telegram_id: int) -> bool:
     user = await db.get_user(telegram_id=telegram_id)
     return bool(user['is_admin']) if user else False
 
-async def is_user_in_group(bot: Bot, telegram_id: int) -> bool:
-    """
-    Проверяет, состоит ли пользователь в основной группе.
-    """
-    if telegram_id == 0:
-        return True
-        
-    try:
-        member = await bot.get_chat_member(MAIN_GROUP_ID, telegram_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logger.warning(f"Could not check user {telegram_id} in group {MAIN_GROUP_ID}: {e}")
-        return False
+
 
 async def ensure_user_exists(telegram_id: int, username: str | None, is_bot: bool = False) -> bool:
     """
@@ -213,7 +218,8 @@ def get_next_run_time(
                 days_ahead += 7
             elif days_ahead == 0:
                 # Если время уже наступило или прошло, переносим этот день на следующую неделю.
-                if now.time() > event_time:
+                event_dt_today = datetime.combine(now.date(), event_time, tzinfo=MOSCOW_TZ)
+                if now > event_dt_today:
                     days_ahead = 7
             
             # Находим минимальное положительное окно ожидания

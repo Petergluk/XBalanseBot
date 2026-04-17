@@ -41,7 +41,7 @@ from apscheduler.triggers.cron import CronTrigger
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, REDIS_HOST
+from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, REDIS_HOST, REDIS_URL, WEBHOOK_SECRET_TOKEN
 from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers, tag_reward_handler
 from app.services import scheduler_jobs
@@ -67,16 +67,18 @@ logger = logging.getLogger(__name__)
 
 
 async def logging_middleware(handler, event, data: dict):
-    """Outer middleware for unified update logging."""
+    """Outer middleware for unified update logging (redacted for privacy)."""
     user = data.get('event_from_user')
     if user:
         if isinstance(event, Message):
-            logger.info(f"User {user.id} (@{user.username}) sent message: '{event.text}'")
+            is_command = event.text and event.text.startswith('/')
+            msg_type = f"command '{event.text.split()[0]}'" if is_command else "message"
+            logger.info(f"User {user.id} sent {msg_type}")
         elif isinstance(event, CallbackQuery):
-            logger.info(f"User {user.id} (@{user.username}) sent callback: '{event.data}'")
+            logger.info(f"User {user.id} sent callback: '{event.data}'")
         elif isinstance(event, ChatMemberUpdated):
             logger.info(
-                f"User {user.id} (@{user.username}) caused chat member update: {event.new_chat_member.status}"
+                f"User {user.id} caused chat member update: {event.new_chat_member.status}"
             )
     return await handler(event, data)
 
@@ -149,7 +151,7 @@ async def main():
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     
-    redis_url = f"redis://{REDIS_HOST}:6379/0"
+    redis_url = REDIS_URL if REDIS_URL else f"redis://{REDIS_HOST}:6379/0"
     storage = RedisStorage.from_url(redis_url, key_builder=DefaultKeyBuilder(with_destiny=True))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
 
@@ -182,7 +184,10 @@ async def main():
 
             logger.info("Bot is running in PRODUCTION mode (webhook).")
             webhook_url = f"https://{WEBHOOK_HOST}/webhook/telegram"
-            await bot.set_webhook(webhook_url)
+            if WEBHOOK_SECRET_TOKEN:
+                await bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET_TOKEN)
+            else:
+                await bot.set_webhook(webhook_url)
             logger.info(f"Webhook set to: {webhook_url}")
             await run_webhook_server(bot, dp)
 

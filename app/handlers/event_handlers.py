@@ -70,6 +70,14 @@ async def cleanup_creation_dialog(bot: Bot, chat_id: int, state: FSMContext):
     await state.clear()
 
 
+def add_message_id_to_state(data: dict, msg_id: int):
+    """Helper for limiting message_ids in state to prevent memory leak."""
+    MAX_IDS = 15
+    msgs = data.get('message_ids', [])
+    msgs.append(msg_id)
+    return msgs[-MAX_IDS:]
+
+
 # --- USER COMMANDS ---
 
 @router.message(Command("event", ignore_case=True))
@@ -264,8 +272,12 @@ async def process_use_activity_description(callback: CallbackQuery, state: FSMCo
 @router.message(EventCreationStates.waiting_for_event_description)
 async def process_event_description(message: Message, state: FSMContext):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
+    
+    if len(message.text) > 4000:
+        await message.reply("Описание слишком длинное (макс. 4000 символов). Пожалуйста, сократите текст.")
+        return
+        
+    message_ids = add_message_id_to_state(data, message.message_id)
     
     await state.update_data(description=message.text)
     await state.set_state(EventCreationStates.waiting_for_type)
@@ -467,10 +479,17 @@ async def process_event_cost(message: Message, state: FSMContext):
 @router.message(EventCreationStates.waiting_for_link)
 async def process_event_link(message: Message, state: FSMContext):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
 
-    await state.update_data(link=message.text)
+    link = message.text.strip()
+    from urllib.parse import urlparse
+    parsed = urlparse(link)
+    if not (parsed.scheme in ('http', 'https') and parsed.netloc):
+        await message.reply("Некорректная ссылка (нет http/https или домена).")
+        return
+
+    message_ids = add_message_id_to_state(data, message.message_id)
+
+    await state.update_data(link=link)
     await state.set_state(EventCreationStates.waiting_for_reminder_time)
 
     sent_message = await message.answer(

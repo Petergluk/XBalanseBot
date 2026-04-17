@@ -121,20 +121,40 @@ async def cmd_test(message: Message):
 
 @router.message(Command("users", ignore_case=True))
 async def cmd_users(message: Message):
-    users = await db.get_all_users()
-    if not users:
-        await message.answer(LEXICON_RU["msg_admin_no_users"])
+    # Loading stub for /users
+    loading_msg = await message.answer("🔄 Загрузка списка пользователей...")
+
+    total_users = await db.get_total_users_count()
+    if total_users == 0:
+        await loading_msg.edit_text(LEXICON_RU["msg_admin_no_users"])
         return
+        
     page_size = 20
-    total_users = len(users)
+    total_pages = (total_users + page_size - 1) // page_size
+    
+    args = message.text.split()
+    page = 1
+    if len(args) > 1 and args[1].isdigit():
+        page = int(args[1])
+        if page < 1: page = 1
+        elif page > total_pages: page = total_pages
+        
+    offset = (page - 1) * page_size
+    users_page = await db.get_users_page(limit=page_size, offset=offset)
+    
     response_parts = [LEXICON_RU["msg_admin_users_header"].format(total_users=total_users)]
-    for i, user in enumerate(users[:page_size]):
+    for i, user in enumerate(users_page):
         admin_mark = "👮" if user['is_admin'] else ""
         username_str = f"@{user['username']}" if user['username'] else f"ID:{user['telegram_id']}"
-        response_parts.append(LEXICON_RU["msg_admin_user_row"].format(index=i+1, admin_mark=admin_mark, username=username_str, balance=format_amount(user['balance']), currency_symbol=CURRENCY_SYMBOL))
-    if total_users > page_size:
-        response_parts.append(LEXICON_RU["msg_admin_users_footer"].format(page_size=page_size, total_users=total_users))
-    await message.answer("".join(response_parts), parse_mode="HTML")
+        response_parts.append(LEXICON_RU["msg_admin_user_row"].format(index=offset+i+1, admin_mark=admin_mark, username=username_str, balance=format_amount(user['balance']), currency_symbol=CURRENCY_SYMBOL))
+        
+    if total_pages > 1:
+        if page < total_pages:
+            response_parts.append(f"\n📄 Страница {page}/{total_pages}. Для следующей: <code>/users {page + 1}</code>")
+        else:
+            response_parts.append(f"\n📄 Страница {page}/{total_pages}.")
+            
+    await loading_msg.edit_text("".join(response_parts), parse_mode="HTML")
 
 
 @router.message(Command("check", ignore_case=True))
@@ -319,8 +339,8 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         await callback.answer()
 
 async def _update_setting_and_finish(message: Message, state: FSMContext, key: str, value_transformer=str, validator=None):
-    # Проверяем /cancel до попытки парсинга
-    if message.text and message.text.strip().lower().startswith('/cancel'):
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
         await state.clear()
         await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
         from app.handlers.user_commands import show_main_menu
@@ -477,7 +497,17 @@ async def cmd_list_tag_rules(message: Message):
         return
     text = LEXICON_RU["msg_tag_rules_list_header"]
     for rule in rules:
-        limit_str = f", лимит {rule['daily_limit']}/день" if rule['daily_limit'] else ""
+        if rule['limit_amount']:
+            if rule['limit_period_days'] == 0:
+                limit_str = f", лимит {rule['limit_amount']} (навсегда)"
+            elif rule['limit_period_days'] == 1:
+                limit_str = f", лимит {rule['limit_amount']}/сутки"
+            elif rule['limit_period_days'] == 7:
+                limit_str = f", лимит {rule['limit_amount']}/неделю"
+            else:
+                limit_str = f", лимит {rule['limit_amount']} за {rule['limit_period_days']} дн."
+        else:
+            limit_str = ""
         thread_str = f", топик {rule['thread_id']}" if rule['thread_id'] else ""
         status = "" if rule['is_active'] else " [откл.]"
         text += LEXICON_RU["msg_tag_rule_row"].format(
@@ -539,7 +569,13 @@ async def cmd_add_tag_rule_start(message: Message, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_hashtag)
 async def tag_rule_get_hashtag(message: Message, state: FSMContext):
-    tag = message.text.strip().lstrip('#').lower()
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    tag = msg_text.lstrip('#').lower()
     if not tag:
         await message.reply("Введите непустой хэштег.")
         return
@@ -550,7 +586,13 @@ async def tag_rule_get_hashtag(message: Message, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_min_chars)
 async def tag_rule_get_min_chars(message: Message, state: FSMContext):
-    if not message.text.strip().isdigit():
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    if not msg_text.isdigit():
         await message.reply("Введите целое число ≥ 0.")
         return
     await state.update_data(min_chars=int(message.text.strip()))
@@ -560,25 +602,61 @@ async def tag_rule_get_min_chars(message: Message, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_reward)
 async def tag_rule_get_reward(message: Message, state: FSMContext):
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
     from decimal import Decimal, InvalidOperation
     try:
-        reward = Decimal(message.text.strip().replace(',', '.'))
+        reward = Decimal(msg_text.replace(',', '.'))
         if reward <= 0:
             raise ValueError
     except (InvalidOperation, ValueError):
         await message.reply("Введите положительное число, например: 100")
         return
     await state.update_data(reward=float(reward))
-    await state.set_state(TagRuleCreationStates.waiting_for_daily_limit)
-    await message.answer(LEXICON_RU["msg_add_tag_rule_daily_limit"], reply_markup=_cancel_keyboard())
+    await state.set_state(TagRuleCreationStates.waiting_for_limit_amount)
+    await message.answer(LEXICON_RU["msg_add_tag_rule_limit_amount"], reply_markup=_cancel_keyboard())
 
 
-@router.message(TagRuleCreationStates.waiting_for_daily_limit)
-async def tag_rule_get_daily_limit(message: Message, state: FSMContext):
-    if not message.text.strip().isdigit():
+@router.message(TagRuleCreationStates.waiting_for_limit_amount)
+async def tag_rule_get_limit_amount(message: Message, state: FSMContext):
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    if not msg_text.isdigit():
         await message.reply("Введите целое число ≥ 0.")
         return
-    await state.update_data(daily_limit=int(message.text.strip()))
+    limit_amount = int(message.text.strip())
+    await state.update_data(limit_amount=limit_amount)
+    
+    if limit_amount == 0:
+        # Если лимита нет, то и период не важен
+        await state.update_data(limit_period_days=0)
+        await state.set_state(TagRuleCreationStates.waiting_for_thread_id)
+        await message.answer(LEXICON_RU["msg_add_tag_rule_thread_id"], reply_markup=_skip_keyboard(), parse_mode="HTML")
+    else:
+        await state.set_state(TagRuleCreationStates.waiting_for_limit_period)
+        await message.answer(LEXICON_RU["msg_add_tag_rule_limit_period"], reply_markup=_cancel_keyboard())
+
+
+@router.message(TagRuleCreationStates.waiting_for_limit_period)
+async def tag_rule_get_limit_period(message: Message, state: FSMContext):
+    msg_text = (message.text or "").strip()
+    if msg_text.lower() == "cancel" or msg_text.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    if not msg_text.isdigit():
+        await message.reply("Введите целое число (0, 1, 7 и т.д.).")
+        return
+    await state.update_data(limit_period_days=int(message.text.strip()))
     await state.set_state(TagRuleCreationStates.waiting_for_thread_id)
     await message.answer(LEXICON_RU["msg_add_tag_rule_thread_id"], reply_markup=_skip_keyboard(), parse_mode="HTML")
 
@@ -654,7 +732,8 @@ async def _finish_tag_rule(message, state: FSMContext, reaction: str):
         hashtag=data['hashtag'],
         min_chars=data['min_chars'],
         reward=data['reward'],
-        daily_limit=data['daily_limit'],
+        limit_amount=data['limit_amount'],
+        limit_period_days=data.get('limit_period_days', 1),
         thread_id=data.get('thread_id'),
         group_msg=data.get('group_msg'),
         bot_msg=data.get('bot_msg'),

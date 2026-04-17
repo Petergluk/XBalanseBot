@@ -167,6 +167,7 @@ class TestProcessDemurrage:
         mock_cur = MagicMock()
         mock_cur.fetchall = AsyncMock(return_value=users_to_tax)
         mock_cur.execute = AsyncMock()
+        mock_cur.executemany = AsyncMock()
         
         mock_tx = MagicMock()
         mock_conn = MagicMock()
@@ -198,10 +199,9 @@ class TestProcessDemurrage:
             # Проверяем, что дата обновлена
             mock_db.set_setting.assert_called_once_with('demurrage_last_run', date.today().isoformat())
             
-            # Проверяем кол-во выполнений (4 execute для юзеров + 1 добавление в фонд)
-            # 1 запрос users - %s; 1 запрос history - %s
-            # 2 users -> 4 calls. + 1 update fund = 5 calls
-            assert mock_conn.execute.call_count == 5
+            # 2 batch execute calls + 1 update fund call
+            assert mock_cur.executemany.call_count == 2
+            assert mock_conn.execute.call_count == 1
             
             # Проверим, что фонд получил 1.5
             last_execute_args = mock_conn.execute.call_args_list[-1][0]

@@ -80,13 +80,17 @@ class TestCmdUsers:
     async def test_cmd_users_empty(self, mock_db):
         """Если нет пользователей, бот отвечает соответствующим сообщением."""
         from app.handlers.admin_commands import cmd_users
-        mock_db.get_all_users = AsyncMock(return_value=[])
+        mock_db.get_total_users_count = AsyncMock(return_value=0)
+        mock_db.get_users_page = AsyncMock(return_value=[])
 
         msg = make_message("/users")
+        loading_msg = AsyncMock()
+        msg.answer.return_value = loading_msg
         await cmd_users(msg)
 
         msg.answer.assert_called_once()
-        call_text = msg.answer.call_args[0][0]
+        loading_msg.edit_text.assert_called_once()
+        call_text = loading_msg.edit_text.call_args[0][0]
         assert "пока нет" in call_text.lower()
 
     @pytest.mark.asyncio
@@ -94,16 +98,20 @@ class TestCmdUsers:
     async def test_cmd_users_with_data(self, mock_db):
         """С пользователями — должен показать список с балансами."""
         from app.handlers.admin_commands import cmd_users
-        mock_db.get_all_users = AsyncMock(return_value=[
+        mock_db.get_total_users_count = AsyncMock(return_value=2)
+        mock_db.get_users_page = AsyncMock(return_value=[
             {'id': 1, 'username': 'alice', 'telegram_id': 1001, 'balance': Decimal('500'), 'is_admin': False},
             {'id': 2, 'username': 'bob', 'telegram_id': 1002, 'balance': Decimal('100'), 'is_admin': True},
         ])
 
         msg = make_message("/users")
+        loading_msg = AsyncMock()
+        msg.answer.return_value = loading_msg
         await cmd_users(msg)
 
         msg.answer.assert_called_once()
-        call_text = msg.answer.call_args[0][0]
+        loading_msg.edit_text.assert_called_once()
+        call_text = loading_msg.edit_text.call_args[0][0]
         assert "Всего пользователей: 2" in call_text
         assert "@alice" in call_text
         assert "@bob" in call_text

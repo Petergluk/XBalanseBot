@@ -194,6 +194,7 @@ LEXICON_RU: dict[str, str] = {
     
     # === Инлайн Кнопки ===
     "btn_menu_send": "💸 Перевести Ӫ другому участнику",
+    "btn_menu_create_offer": "📦 Создать объявление",
     "btn_menu_activity": "🎨 Активности сообщества",
     "btn_menu_event": "📅 Ближайшие события",
     "btn_menu_balance": "💰 Баланс и история",
@@ -664,4 +665,67 @@ LEXICON_RU: dict[str, str] = {
     "msg_admin_no_subscribers": "\n<i>На эту активность пока никто не подписан.</i>",
     "msg_admin_subscriber_row": "\n{index}. {username}",
     "msg_admin_subscribers_found": "Найдено {count} подписчиков.",
+
+    # === Биржа обмена (Объявления) ===
+    "btn_buy_offer": "🛒 Купить за {price} {currency_symbol}",
+    "btn_publish": "✅ Опубликовать",
+    "btn_skip_photo": "➡️ Пропустить фото",
+    "btn_skip_desc": "➡️ Пропустить описание",
+
+    "msg_offer_prompt_title": "✏️ Введите <b>название</b> товара или услуги (до 100 символов):\n\n<i>Например: Книга по Python, Консультация по маркетингу</i>",
+    "msg_offer_prompt_desc": "✏️ Введите <b>описание</b> (подробности, условия обмена, контакты):\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
+    "msg_offer_prompt_price": "✏️ Укажите <b>цену</b> в {currency_symbol} (число > 0):",
+    "msg_offer_prompt_photo": "📷 Отправьте <b>одно фото</b> товара.\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
+    
+    "msg_offer_preview_header": "🔍 <b>Предпросмотр объявления:</b>\n\n",
+    "msg_offer_preview_confirm": "\n\nВсе верно? Нажмите «Опубликовать», чтобы отправить объявление в группу.",
+    
+    "msg_offer_card": (
+        "📦 <b>Предложение обмена</b>\n\n"
+        "<b>Название:</b> {title}\n"
+        "{desc_part}"
+        "<b>Цена:</b> <b>{price} {currency_symbol}</b>\n"
+        "<b>Продавец:</b> @{seller_username}\n\n"
+        "<i>Нажмите кнопку ниже, чтобы купить этот товар. Бот спишет средства с вашего баланса и переведет продавцу.</i>"
+    ),
+    
+    "msg_offer_card_sold": (
+        "🤝 <b>Сделка завершена! (ПРОДАНО)</b>\n\n"
+        "<b>Товар/Услуга:</b> {title}\n"
+        "<b>Продавец:</b> @{seller_username}\n"
+        "<b>Покупатель:</b> @{buyer_username}\n"
+        "<b>Цена:</b> <b>{price} {currency_symbol}</b>\n\n"
+        "✅ Сделка проведена автоматически через бота."
+    ),
+
+    "msg_offer_card_cancelled": (
+        "❌ <b>Объявление отменено</b>\n\n"
+        "<b>Товар/Услуга:</b> {title}\n"
+        "<b>Продавец:</b> @{seller_username}\n"
+        "<b>Цена:</b> {price} {currency_symbol}\n\n"
+        "<i>Это предложение больше неактивно.</i>"
+    ),
+
+    "msg_offer_purchase_success_seller": (
+        "🎉 Ура! Ваше предложение <b>«{title}»</b> было успешно куплено!\n"
+        "🤝 Покупатель: @{buyer_username}\n"
+        "💰 Вам начислено: <b>{price} {currency_symbol}</b>"
+    ),
+
+    "msg_offer_purchase_success_buyer": (
+        "✅ Вы успешно приобрели <b>«{title}»</b> за <b>{price} {currency_symbol}</b>!\n"
+        "👤 Продавец: @{seller_username}\n"
+        "Свяжитесь с ним для получения товара/услуги."
+    ),
+
+    "msg_offer_created_success": "✅ Ваше объявление успешно создано и опубликовано в группе!",
+    "msg_offer_cancelled_success": "✅ Объявление успешно отменено.",
+
+    "err_offer_price_invalid": "❌ Пожалуйста, введите положительное число. Например: 100 или 25.5",
+    "err_offer_photo_invalid": "❌ Пожалуйста, отправьте именно фото (картинку) или нажмите кнопку пропуска.",
+    "err_offer_not_found": "❌ Объявление не найдено.",
+    "err_offer_already_sold": "❌ Это объявление уже продано.",
+    "err_offer_already_cancelled": "❌ Это объявление было отменено.",
+    "err_offer_own_purchase": "❌ Вы не можете купить собственное предложение!",
+    "err_offer_insufficient_funds": "❌ Недостаточно средств на балансе для совершения этой покупки.",
 }

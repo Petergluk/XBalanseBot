@@ -43,7 +43,7 @@ if sys.platform == "win32":
 
 from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, REDIS_HOST, REDIS_URL, WEBHOOK_SECRET_TOKEN
 from app.database import db
-from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers, tag_reward_handler
+from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers, tag_reward_handler, offer_handlers
 from app.services import scheduler_jobs
 from app.services.webhook_handler import run_webhook_server
 from app import callbacks # Импорт нового модуля callbacks
@@ -163,6 +163,7 @@ async def main():
     dp.include_router(tag_reward_handler.router)  # Must be before admin router (no middleware)
     dp.include_router(admin_commands.router)
     dp.include_router(user_commands.router)
+    dp.include_router(offer_handlers.router)
     dp.include_router(activity_handlers.router)
     dp.include_router(event_handlers.router)
 

@@ -24,7 +24,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.callbacks import (
     GeneralAction, ActivityAction, ActivityEditAction, EventAction,
     EventEditAction, EventCreationAction, SettingsAction, TransferAction,
-    ConfirmDeleteAction
+    ConfirmDeleteAction, OfferAction
 )
 from app.utils import get_next_run_time, format_weekdays, parse_weekdays
 from app.lexicon import LEXICON_RU
@@ -42,6 +42,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Создает клавиатуру главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_send"], callback_data=GeneralAction(action="menu_send").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_create_offer"], callback_data=GeneralAction(action="menu_create_offer").pack()))
     builder.row(
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_activity"], callback_data=GeneralAction(action="menu_activity").pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_event"], callback_data=GeneralAction(action="menu_event").pack())
@@ -406,4 +407,43 @@ def get_welcome_group_prompt_keyboard(is_enabled: bool) -> InlineKeyboardMarkup:
     
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    return builder.as_markup()
+
+
+def get_offer_group_keyboard(offer_id: int, price) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для объявления в группе с кнопкой Купить."""
+    from app.config import CURRENCY_SYMBOL
+    builder = InlineKeyboardBuilder()
+    btn_text = LEXICON_RU["btn_buy_offer"].format(price=price, currency_symbol=CURRENCY_SYMBOL)
+    builder.row(InlineKeyboardButton(text=btn_text, callback_data=OfferAction(action="buy", offer_id=offer_id).pack()))
+    return builder.as_markup()
+
+
+def get_offer_confirm_keyboard(offer_id: int) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для подтверждения публикации объявления."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=LEXICON_RU["btn_publish"], callback_data=OfferAction(action="publish", offer_id=offer_id).pack()),
+        InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+    )
+    return builder.as_markup()
+
+
+def get_offer_photo_skip_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру для пропуска шага отправки фото."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=LEXICON_RU["btn_skip_photo"], callback_data=GeneralAction(action="skip_photo").pack()),
+        InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+    )
+    return builder.as_markup()
+
+
+def get_offer_desc_skip_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру для пропуска шага описания."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=LEXICON_RU["btn_skip_desc"], callback_data=GeneralAction(action="skip_desc").pack()),
+        InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+    )
     return builder.as_markup()

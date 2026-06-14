@@ -54,9 +54,10 @@ async def _ensure_test_database_exists():
         await conn.close()
 
     # Прогоняем Alembic-миграции на тестовой БД
+    import sys
     import subprocess
     result = subprocess.run(
-        ["python", "-m", "alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         capture_output=True, text=True,
         cwd=os.path.dirname(os.path.dirname(__file__))
     )
@@ -84,6 +85,7 @@ async def db():
     yield test_db
     # Очистка: удаляем тестовые данные (только в xblns_test!)
     async with test_db.pool.connection() as conn:
+        await conn.execute("DELETE FROM offers")
         await conn.execute("DELETE FROM event_registration_overrides")
         await conn.execute("DELETE FROM transactions WHERE id > 0")
         await conn.execute("DELETE FROM events")

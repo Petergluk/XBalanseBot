@@ -105,3 +105,13 @@ class ConfirmDeleteAction(CallbackData, prefix="del"):
     """
     item_type: str
     item_id: int
+
+
+class OfferAction(CallbackData, prefix="off"):
+    """
+    Колбэк для действий с объявлениями маркетплейса.
+    `action`: 'buy' (покупка), 'cancel' (отмена продавцом/админом)
+    `offer_id`: ID объявления
+    """
+    action: str
+    offer_id: int

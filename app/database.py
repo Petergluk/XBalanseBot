@@ -722,5 +722,138 @@ class Database:
                 )
                 return True
 
+    async def create_offer(self, seller_telegram_id: int, title: str, description: Optional[str], price, photo_id: Optional[str]) -> int:
+        """Создает объявление в БД и возвращает его ID."""
+        from decimal import Decimal
+        price = Decimal(str(price))
+        user = await self.get_user(telegram_id=seller_telegram_id)
+        if not user:
+            raise ValueError("seller_not_found")
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """INSERT INTO offers (seller_id, title, description, price, photo_id, status)
+                       VALUES (%s, %s, %s, %s, %s, 'active') RETURNING id""",
+                    (user['id'], title, description, price, photo_id)
+                )
+                row = await cur.fetchone()
+                return row[0]
+
+    async def get_offer(self, offer_id: int) -> Optional[Dict[str, Any]]:
+        """Возвращает объявление по ID, включая информацию о продавце и покупателе."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """SELECT o.*, 
+                              s.username as seller_username, s.telegram_id as seller_telegram_id,
+                              b.username as buyer_username, b.telegram_id as buyer_telegram_id
+                       FROM offers o
+                       JOIN users s ON o.seller_id = s.id
+                       LEFT JOIN users b ON o.buyer_id = b.id
+                       WHERE o.id = %s""",
+                    (offer_id,)
+                )
+                return await cur.fetchone()
+
+    async def update_offer_message(self, offer_id: int, chat_id: int, message_id: int):
+        """Сохраняет ID сообщения, опубликованного в группе."""
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE offers SET chat_id = %s, message_id = %s WHERE id = %s",
+                (chat_id, message_id, offer_id)
+            )
+
+    async def execute_offer_purchase(self, offer_id: int, buyer_telegram_id: int) -> Dict[str, Any]:
+        """
+        Выполняет транзакцию покупки предложения.
+        Проверяет баланс покупателя, осуществляет перевод орфов от покупателя к продавцу,
+        записывает транзакцию, меняет статус объявления на 'sold'.
+        Выполняется атомарно с использованием FOR UPDATE.
+        """
+        from decimal import Decimal
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                # 1. Получаем объявление
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT * FROM offers WHERE id = %s FOR UPDATE", (offer_id,))
+                    offer = await cur.fetchone()
+                
+                if not offer:
+                    raise ValueError("offer_not_found")
+                if offer['status'] != 'active':
+                    raise ValueError(f"offer_already_{offer['status']}")
+                
+                # 2. Получаем продавца
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT * FROM users WHERE id = %s FOR UPDATE", (offer['seller_id'],))
+                    seller = await cur.fetchone()
+                if not seller:
+                    raise ValueError("seller_not_found")
+                
+                # 3. Получаем покупателя
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT * FROM users WHERE telegram_id = %s FOR UPDATE", (buyer_telegram_id,))
+                    buyer = await cur.fetchone()
+                if not buyer:
+                    raise ValueError("buyer_not_found")
+                
+                if buyer['id'] == seller['id']:
+                    raise ValueError("cannot_buy_own_offer")
+                
+                price = Decimal(str(offer['price']))
+                if buyer['balance'] < price:
+                    raise ValueError("insufficient_funds")
+                
+                # 4. Обновляем балансы
+                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (price, buyer['id']))
+                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (price, seller['id']))
+                
+                # 5. Записываем транзакцию
+                comment = f"Покупка товара: {offer['title']}"
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'purchase', %s)",
+                    (buyer['id'], seller['id'], price, comment)
+                )
+                
+                # 6. Увеличиваем счетчик транзакций
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id IN (%s, %s)", (buyer['id'], seller['id']))
+                
+                # 7. Обновляем статус объявления
+                await conn.execute("UPDATE offers SET status = 'sold', buyer_id = %s WHERE id = %s", (buyer['id'], offer_id))
+                
+                return {
+                    "offer": offer,
+                    "seller": seller,
+                    "buyer": buyer,
+                    "price": price
+                }
+
+    async def cancel_offer(self, offer_id: int, user_telegram_id: int) -> bool:
+        """
+        Отменяет объявление. Отменить может либо продавец, либо администратор.
+        Возвращает True в случае успеха.
+        """
+        user = await self.get_user(telegram_id=user_telegram_id)
+        if not user:
+            return False
+        
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT * FROM offers WHERE id = %s FOR UPDATE", (offer_id,))
+                    offer = await cur.fetchone()
+                if not offer:
+                    return False
+                
+                # Проверяем права: либо создатель (seller_id), либо админ
+                if offer['seller_id'] != user['id'] and not user['is_admin']:
+                    return False
+                
+                if offer['status'] != 'active':
+                    return False
+                
+                await conn.execute("UPDATE offers SET status = 'cancelled' WHERE id = %s", (offer_id,))
+                return True
+
 
 db = Database(CONNINFO)

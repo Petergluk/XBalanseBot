@@ -420,3 +420,46 @@ class TestEventEditResilience:
         call_text = cb.message.answer.call_args[0][0]
         assert "ДД.ММ.ГГГГ" in call_text
         cb.answer.assert_called()
+
+
+class TestTopicsSettings:
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.admin_commands.db")
+    async def test_menu_topics(self, mock_db):
+        from app.handlers.admin_commands import process_settings_callbacks
+        from app.callbacks import SettingsAction
+        
+        mock_db.get_setting = AsyncMock(return_value="12345")
+        
+        cb_data = SettingsAction(action="menu_topics")
+        cb = make_callback()
+        state = make_state()
+        
+        await process_settings_callbacks(cb, state, cb_data)
+        
+        mock_db.get_setting.assert_called_once_with("market_thread_id", "0")
+        cb.message.edit_text.assert_called_once()
+        call_text = cb.message.edit_text.call_args[0][0]
+        assert "ID 12345" in call_text
+        cb.answer.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.admin_commands.db")
+    async def test_reset_market_thread(self, mock_db):
+        from app.handlers.admin_commands import process_settings_callbacks
+        from app.callbacks import SettingsAction
+        
+        mock_db.set_setting = AsyncMock()
+        
+        cb_data = SettingsAction(action="reset_market_thread")
+        cb = make_callback()
+        state = make_state()
+        
+        await process_settings_callbacks(cb, state, cb_data)
+        
+        mock_db.set_setting.assert_called_once_with("market_thread_id", "0")
+        cb.answer.assert_called_once()
+        cb.message.edit_text.assert_called_once()
+        call_text = cb.message.edit_text.call_args[0][0]
+        assert "Общий чат" in call_text

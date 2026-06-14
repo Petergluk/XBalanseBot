@@ -81,11 +81,15 @@ def add_message_id_to_state(data: dict, msg_id: int):
 # --- USER COMMANDS ---
 
 @router.message(Command("event", ignore_case=True))
-async def cmd_event(message: Message):
+async def cmd_event(target: Message | CallbackQuery):
     events = await db.get_all_events()
     if not events:
         from app.keyboards import get_back_to_menu_keyboard
-        await message.answer(LEXICON_RU["msg_events_none_soon"], reply_markup=get_back_to_menu_keyboard())
+        text = LEXICON_RU["msg_events_none_soon"]
+        if isinstance(target, Message):
+            await target.answer(text, reply_markup=get_back_to_menu_keyboard())
+        elif isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=get_back_to_menu_keyboard())
         return
 
     now = datetime.now(MOSCOW_TZ)
@@ -109,14 +113,19 @@ async def cmd_event(message: Message):
     
     if not this_week_events:
         from app.keyboards import get_back_to_menu_keyboard
-        await message.answer(LEXICON_RU["msg_events_none_this_week"], reply_markup=get_back_to_menu_keyboard())
+        text = LEXICON_RU["msg_events_none_this_week"]
+        if isinstance(target, Message):
+            await target.answer(text, reply_markup=get_back_to_menu_keyboard())
+        elif isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=get_back_to_menu_keyboard())
         return
 
     keyboard = await get_events_keyboard(this_week_events)
-    await message.answer(
-        LEXICON_RU["msg_events_this_week_header"],
-        reply_markup=keyboard
-    )
+    text = LEXICON_RU["msg_events_this_week_header"]
+    if isinstance(target, Message):
+        await target.answer(text, reply_markup=keyboard)
+    elif isinstance(target, CallbackQuery):
+        await target.message.edit_text(text, reply_markup=keyboard)
 
 @router.callback_query(EventAction.filter(F.action == "view"))
 async def process_event_selection(callback: CallbackQuery, callback_data: EventAction):
@@ -157,35 +166,7 @@ async def process_event_selection(callback: CallbackQuery, callback_data: EventA
 
 @router.callback_query(GeneralAction.filter(F.action == "back_to_events"))
 async def back_to_events_list(callback: CallbackQuery):
-    if isinstance(callback.message, Message):
-        await cmd_event(callback.message)
-    else:
-        # Для CallbackQuery нужно имитировать вызов cmd_event, но без Message объекта
-        # Можно просто отредактировать сообщение с новым списком событий
-        events = await db.get_all_events()
-        now = datetime.now(MOSCOW_TZ)
-        week_ahead = now + timedelta(days=7)
-        dated_events = []
-        for event in events:
-            next_run = get_next_run_time(
-                event['event_type'],
-                event.get('event_date'),
-                event.get('weekday'),
-                event.get('event_time'),
-                event.get('last_run'),
-                event.get('end_date'),
-            )
-            if next_run:
-                dated_events.append((next_run, event))
-        dated_events.sort(key=lambda x: x[0])
-        this_week_events = [event for run_time, event in dated_events if run_time <= week_ahead]
-        
-        if not this_week_events:
-            await callback.message.edit_text(LEXICON_RU["msg_events_none_this_week"])
-        else:
-            keyboard = await get_events_keyboard(this_week_events)
-            await callback.message.edit_text(LEXICON_RU["msg_events_this_week_header"], reply_markup=keyboard)
-
+    await cmd_event(callback)
     await callback.answer()
 
 # --- ADMIN: CREATE EVENT (REWORKED FSM) ---

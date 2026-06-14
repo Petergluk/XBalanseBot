@@ -143,8 +143,7 @@ async def process_menu_activity(callback: CallbackQuery):
 @router.callback_query(GeneralAction.filter(F.action == "menu_event"))
 async def process_menu_event(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.delete()
-    await event_handlers.cmd_event(callback.message)
+    await event_handlers.cmd_event(callback)
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_help"))
 async def process_menu_help(callback: CallbackQuery):

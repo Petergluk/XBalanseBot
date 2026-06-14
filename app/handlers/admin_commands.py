@@ -301,10 +301,27 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         await callback.answer()
         
     elif action == "menu_tag_rules":
-        await callback.message.delete()
         from app.handlers.admin_commands import cmd_list_tag_rules
-        await cmd_list_tag_rules(callback.message)
+        await cmd_list_tag_rules(callback)
         await callback.answer()
+
+    elif action == "menu_topics":
+        market_thread_id = await db.get_setting("market_thread_id", "0")
+        topic_status = f"ID {market_thread_id}" if market_thread_id != "0" else "Общий чат (General)"
+        text = LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
+        from app.keyboards import get_topics_settings_keyboard
+        kb = get_topics_settings_keyboard()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+
+    elif action == "reset_market_thread":
+        await db.set_setting("market_thread_id", "0")
+        await callback.answer(LEXICON_RU["msg_admin_topics_reset_success"])
+        topic_status = "Общий чат (General)"
+        text = LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
+        from app.keyboards import get_topics_settings_keyboard
+        kb = get_topics_settings_keyboard()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     elif action == "toggle_demurrage":
         is_on = callback_data.enabled
@@ -489,12 +506,25 @@ async def cmd_get_thread_id(message: Message):
 
 
 @router.message(Command("list_tag_rules", ignore_case=True))
-async def cmd_list_tag_rules(message: Message):
+async def cmd_list_tag_rules(target: Message | CallbackQuery):
     """Показывает все правила начисления по хэштегам."""
     rules = await db.get_all_tag_rules()
+    
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    from app.callbacks import SettingsAction
+    builder = InlineKeyboardBuilder()
+    
     if not rules:
-        await message.answer(LEXICON_RU["msg_tag_rules_list_empty"])
+        text = LEXICON_RU["msg_tag_rules_list_empty"]
+        builder.row(InlineKeyboardButton(text="➕ Добавить правило", callback_data="add_tag_rule_btn"))
+        builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+        if isinstance(target, Message):
+            await target.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        elif isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
         return
+        
     text = LEXICON_RU["msg_tag_rules_list_header"]
     for rule in rules:
         if rule['limit_amount']:
@@ -516,11 +546,6 @@ async def cmd_list_tag_rules(message: Message):
             limit_str=limit_str, thread_str=thread_str, rule_id=rule['id']
         ) + status
     
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    from aiogram.types import InlineKeyboardButton
-    from app.callbacks import SettingsAction
-    builder = InlineKeyboardBuilder()
-    
     # Добавляем кнопки удаления для каждого правила
     for rule in rules:
         builder.row(InlineKeyboardButton(text=f"🗑 Удалить #{rule['hashtag']}", callback_data=f"del_tag_rule_{rule['id']}"))
@@ -528,7 +553,10 @@ async def cmd_list_tag_rules(message: Message):
     builder.row(InlineKeyboardButton(text="➕ Добавить правило", callback_data="add_tag_rule_btn"))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
     
-    await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    if isinstance(target, Message):
+        await target.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
+    elif isinstance(target, CallbackQuery):
+        await target.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "add_tag_rule_btn")
@@ -536,6 +564,7 @@ async def process_add_tag_rule_btn(callback: CallbackQuery, state: FSMContext):
     await callback.message.delete()
     await cmd_add_tag_rule_start(callback.message, state)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("del_tag_rule_"))
 async def process_del_tag_rule(callback: CallbackQuery):
@@ -550,8 +579,7 @@ async def process_del_tag_rule(callback: CallbackQuery):
     await callback.answer(LEXICON_RU["msg_tag_rule_deleted"].format(rule_id=rule_id))
     
     # Обновляем список
-    await callback.message.delete()
-    await cmd_list_tag_rules(callback.message)
+    await cmd_list_tag_rules(callback)
 
 
 @router.message(Command("add_tag_rule", ignore_case=True))

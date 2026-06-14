@@ -730,7 +730,7 @@ class Database:
         price,
         photo_id: Optional[str],
         quantity: int = 1,
-        duration_days: int = 7
+        duration_days: int = 14
     ) -> int:
         """Создает объявление в БД и возвращает его ID."""
         from decimal import Decimal

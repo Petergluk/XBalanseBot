@@ -374,6 +374,17 @@ async def get_settings_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_edit_reminder"], callback_data=SettingsAction(action="edit_reminder").pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_tag_rules"], callback_data=SettingsAction(action="menu_tag_rules").pack())
     )
+    
+    # Кнопка настройки топиков
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_topics"], callback_data=SettingsAction(action="menu_topics").pack()))
+    return builder.as_markup()
+
+
+def get_topics_settings_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру настроек топиков."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Сбросить топик (в общий чат)", callback_data=SettingsAction(action="reset_market_thread").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 
 async def get_demurrage_settings_keyboard(is_enabled: bool) -> InlineKeyboardMarkup:

@@ -263,7 +263,7 @@ async def process_offer_duration_skip(callback: CallbackQuery, state: FSMContext
     message_ids = data.get('message_ids', [])
     message_ids.append(callback.message.message_id)
     
-    await state.update_data(duration_days=7, message_ids=message_ids)
+    await state.update_data(duration_days=14, message_ids=message_ids)
     
     # Запрашиваем фото
     prompt = await callback.message.answer(
@@ -286,7 +286,7 @@ async def process_offer_duration(message: Message, state: FSMContext, bot: Bot):
     dur_str = (message.text or "").strip()
     try:
         duration_days = int(dur_str)
-        if not (1 <= duration_days <= 30):
+        if duration_days <= 0:
             raise ValueError()
     except ValueError:
         # Ошибка ввода срока действия
@@ -319,7 +319,7 @@ async def show_offer_preview(chat_id: int, state: FSMContext, bot: Bot):
     description = data.get('description')
     price = data['price']
     quantity = data.get('quantity', 1)
-    duration_days = data.get('duration_days', 7)
+    duration_days = data.get('duration_days', 14)
     photo_id = data.get('photo_id')
     message_ids = data.get('message_ids', [])
     
@@ -411,7 +411,7 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
     price = data['price']
     photo_id = data.get('photo_id')
     quantity = data.get('quantity', 1)
-    duration_days = data.get('duration_days', 7)
+    duration_days = data.get('duration_days', 14)
     
     user_id = callback.from_user.id
     user = await db.get_user(telegram_id=user_id)

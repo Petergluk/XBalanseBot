@@ -1,0 +1,39 @@
+services:
+  - name: bot
+    type: web
+    git:
+      repository: Petergluk/XBalanseBot
+      branch: master
+      no_deploy_on_push: false
+      builder: docker
+      docker:
+        dockerfile: Dockerfile
+    regions:
+      - was
+    instance_types:
+      - type: free
+    scalings:
+      - min: 0
+        max: 1
+    ports:
+      - port: 8080
+        protocol: http
+    routes:
+      - path: /
+        port: 8080
+    env:
+      - key: BOT_TOKEN
+        value: "8735396870:AAEg_GGriqSq2SNNeT7fvGB8NYyhPMB_OsQ"
+      - key: DATABASE_URL
+        value: "postgresql://postgres:JD186ryJokselMo#42@db.zgkotfoxdffweidekmlw.supabase.co:5432/postgres"
+      - key: DEV_MODE
+        value: "False"
+      - key: MAIN_GROUP_ID
+        value: "-5179110550"
+      - key: SUPER_ADMIN_ID
+        value: "382432926"
+      - key: WEBHOOK_HOST
+        value: "xbalansebot-xbalance-1fe9cf64.koyeb.app"
+      # Сюда нужно вставить новый REDIS_URL после создания базы
+      - key: REDIS_URL
+        value: "rediss://..."

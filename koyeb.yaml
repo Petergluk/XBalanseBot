@@ -36,4 +36,4 @@ services:
         value: "xbalansebot-xbalance-1fe9cf64.koyeb.app"
       # Сюда нужно вставить новый REDIS_URL после создания базы
       - key: REDIS_URL
-        value: "rediss://..."
+        value: "rediss://default:gQAAAAAAAZ78AAIgcDI0ZDA4M2JkNGE5YWU0NGZhYjMyZGYyYWNmMjMyYTE2Ng@together-magpie-106236.upstash.io:6379"

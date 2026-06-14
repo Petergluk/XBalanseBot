@@ -1,0 +1,17 @@
+.venv
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+data/logs
+.env
+.env.prod
+!RUN.bat
+RUN_TESTS.bat
+pytest.ini
+Dockerfile
+docker-compose.yml
+README.md

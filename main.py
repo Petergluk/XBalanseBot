@@ -83,6 +83,53 @@ async def logging_middleware(handler, event, data: dict):
     return await handler(event, data)
 
 
+async def private_chat_restriction_middleware(handler, event, data: dict):
+    """Prevents private-only commands and navigation callbacks from running in groups."""
+    is_message = isinstance(event, Message) or (hasattr(event, "text") and isinstance(event.text, str))
+    is_callback = isinstance(event, CallbackQuery) or (hasattr(event, "data") and isinstance(event.data, str))
+
+    if is_message:
+        if event.chat and event.chat.type in ('group', 'supergroup'):
+            if event.text and event.text.startswith('/'):
+                parts = event.text.split()
+                command = parts[0].lower().split('@')[0]
+                
+                private_commands = {
+                    "/menu", "/balance", "/баланс", "/history", "/settings",
+                    "/users", "/check", "/add", "/rem", "/make_admin", "/remove_admin",
+                    "/list_tag_rules", "/add_tag_rule", "/create_act", "/create_event",
+                    "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start"
+                }
+                
+                if command in private_commands:
+                    bot_info = await event.bot.get_me()
+                    await event.reply(
+                        f"❌ Эта команда доступна только в личных сообщениях со мной: @{bot_info.username}"
+                    )
+                    return
+                
+                if command == "/send" and len(parts) < 3:
+                    await event.reply(
+                        "❌ В группе поддерживается только быстрый перевод:\n"
+                        "<code>/send @username сумма [комментарий]</code>",
+                        parse_mode="HTML"
+                    )
+                    return
+
+    elif is_callback:
+        if event.message and event.message.chat and event.message.chat.type in ('group', 'supergroup'):
+            data_str = event.data or ""
+            blocked_prefixes = ("gen:", "act:", "act_edit:", "evt:", "evt_edit:", "evt_create:", "set:", "tx:", "del:")
+            if data_str.startswith(blocked_prefixes):
+                await event.answer(
+                    "❌ Это действие доступно только в личных сообщениях с ботом.",
+                    show_alert=True
+                )
+                return
+
+    return await handler(event, data)
+
+
 async def setup_super_admin():
     """Ensure the super admin exists and has is_admin flag."""
     logger.info("Checking for super admin setup...")
@@ -158,6 +205,9 @@ async def main():
     dp.message.outer_middleware(logging_middleware)
     dp.callback_query.outer_middleware(logging_middleware)
     dp.chat_member.outer_middleware(logging_middleware)
+
+    dp.message.outer_middleware(private_chat_restriction_middleware)
+    dp.callback_query.outer_middleware(private_chat_restriction_middleware)
 
     dp.include_router(common.router)
     dp.include_router(tag_reward_handler.router)  # Must be before admin router (no middleware)

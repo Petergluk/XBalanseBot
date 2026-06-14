@@ -463,3 +463,83 @@ class TestTopicsSettings:
         cb.message.edit_text.assert_called_once()
         call_text = cb.message.edit_text.call_args[0][0]
         assert "Общий чат" in call_text
+
+
+class TestGroupRestrictions:
+
+    @pytest.mark.asyncio
+    async def test_middleware_blocks_private_command_in_group(self):
+        from main import private_chat_restriction_middleware
+        
+        # message in group
+        msg = make_message(text="/menu", chat_id=-100123)
+        msg.chat.type = "supergroup"
+        
+        # handler mock
+        handler = AsyncMock()
+        
+        await private_chat_restriction_middleware(handler, msg, {})
+        
+        handler.assert_not_called()
+        msg.reply.assert_called_once()
+        assert "личных сообщениях" in msg.reply.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_middleware_allows_private_command_in_private(self):
+        from main import private_chat_restriction_middleware
+        
+        msg = make_message(text="/menu", chat_id=123)
+        msg.chat.type = "private"
+        
+        handler = AsyncMock(return_value="OK")
+        
+        res = await private_chat_restriction_middleware(handler, msg, {})
+        
+        handler.assert_called_once()
+        assert res == "OK"
+
+    @pytest.mark.asyncio
+    async def test_middleware_blocks_send_without_args_in_group(self):
+        from main import private_chat_restriction_middleware
+        
+        msg = make_message(text="/send", chat_id=-100123)
+        msg.chat.type = "supergroup"
+        
+        handler = AsyncMock()
+        
+        await private_chat_restriction_middleware(handler, msg, {})
+        
+        handler.assert_not_called()
+        msg.reply.assert_called_once()
+        assert "быстрый перевод" in msg.reply.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_middleware_blocks_navigation_callback_in_group(self):
+        from main import private_chat_restriction_middleware
+        
+        cb = make_callback(data="gen:main_menu", chat_id=-100123)
+        cb.message.chat.type = "supergroup"
+        
+        handler = AsyncMock()
+        
+        await private_chat_restriction_middleware(handler, cb, {})
+        
+        handler.assert_not_called()
+        cb.answer.assert_called_once_with(
+            "❌ Это действие доступно только в личных сообщениях с ботом.",
+            show_alert=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_middleware_allows_offer_callback_in_group(self):
+        from main import private_chat_restriction_middleware
+        
+        cb = make_callback(data="off:buy:42", chat_id=-100123)
+        cb.message.chat.type = "supergroup"
+        
+        handler = AsyncMock(return_value="OK")
+        
+        res = await private_chat_restriction_middleware(handler, cb, {})
+        
+        handler.assert_called_once()
+        assert res == "OK"

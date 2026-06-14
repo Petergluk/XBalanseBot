@@ -747,3 +747,18 @@ async def _finish_tag_rule(message, state: FSMContext, reaction: str):
         ),
         parse_mode="HTML"
     )
+
+
+@router.message(Command("set_market_thread"))
+async def cmd_set_market_thread(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.reply("❌ Эту команду нужно вызывать в группе/супергруппе в нужном топике.")
+        return
+    
+    thread_id = message.message_thread_id
+    if thread_id is None:
+        await db.set_setting("market_thread_id", "0")
+        await message.reply("✅ Топик для биржи обмена сброшен. Объявления будут публиковаться в общий чат.")
+    else:
+        await db.set_setting("market_thread_id", str(thread_id))
+        await message.reply(f"✅ Топик для биржи обмена успешно установлен (ID темы: {thread_id}). Все новые объявления будут публиковаться сюда.")

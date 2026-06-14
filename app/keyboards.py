@@ -447,3 +447,23 @@ def get_offer_desc_skip_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
     )
     return builder.as_markup()
+
+
+def get_offer_quantity_skip_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру для пропуска шага количества."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=LEXICON_RU["btn_skip_quantity"], callback_data=GeneralAction(action="skip_quantity").pack()),
+        InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+    )
+    return builder.as_markup()
+
+
+def get_offer_duration_skip_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру для пропуска шага срока актуальности."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=LEXICON_RU["btn_skip_duration"], callback_data=GeneralAction(action="skip_duration").pack()),
+        InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+    )
+    return builder.as_markup()

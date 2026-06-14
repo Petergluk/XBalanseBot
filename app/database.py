@@ -722,7 +722,16 @@ class Database:
                 )
                 return True
 
-    async def create_offer(self, seller_telegram_id: int, title: str, description: Optional[str], price, photo_id: Optional[str]) -> int:
+    async def create_offer(
+        self,
+        seller_telegram_id: int,
+        title: str,
+        description: Optional[str],
+        price,
+        photo_id: Optional[str],
+        quantity: int = 1,
+        duration_days: int = 7
+    ) -> int:
         """Создает объявление в БД и возвращает его ID."""
         from decimal import Decimal
         price = Decimal(str(price))
@@ -732,9 +741,9 @@ class Database:
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    """INSERT INTO offers (seller_id, title, description, price, photo_id, status)
-                       VALUES (%s, %s, %s, %s, %s, 'active') RETURNING id""",
-                    (user['id'], title, description, price, photo_id)
+                    """INSERT INTO offers (seller_id, title, description, price, photo_id, status, quantity, expires_at)
+                       VALUES (%s, %s, %s, %s, %s, 'active', %s, CURRENT_TIMESTAMP + %s * interval '1 day') RETURNING id""",
+                    (user['id'], title, description, price, photo_id, quantity, duration_days)
                 )
                 row = await cur.fetchone()
                 return row[0]
@@ -767,13 +776,36 @@ class Database:
         """
         Выполняет транзакцию покупки предложения.
         Проверяет баланс покупателя, осуществляет перевод орфов от покупателя к продавцу,
-        записывает транзакцию, меняет статус объявления на 'sold'.
+        записывает транзакцию, уменьшает количество на 1.
+        Если количество падает до 0, переводит статус в 'sold'.
+        Проверяет, не истек ли срок действия (expires_at).
         Выполняется атомарно с использованием FOR UPDATE.
         """
         from decimal import Decimal
+        from datetime import datetime, timezone
+        is_expired = False
+        async with self.pool.connection() as conn:
+            # 1. Сначала проверяем срок действия объявления вне транзакции
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT * FROM offers WHERE id = %s", (offer_id,))
+                offer = await cur.fetchone()
+            
+            if not offer:
+                raise ValueError("offer_not_found")
+            if offer['status'] != 'active':
+                raise ValueError(f"offer_already_{offer['status']}")
+            
+            if offer['expires_at'] and datetime.now(timezone.utc) > offer['expires_at']:
+                async with conn.transaction():
+                    await conn.execute("UPDATE offers SET status = 'expired' WHERE id = %s", (offer_id,))
+                is_expired = True
+        
+        if is_expired:
+            raise ValueError("offer_expired")
+            
         async with self.pool.connection() as conn:
             async with conn.transaction():
-                # 1. Получаем объявление
+                # 2. Получаем объявление для покупки (с блокировкой FOR UPDATE)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute("SELECT * FROM offers WHERE id = %s FOR UPDATE", (offer_id,))
                     offer = await cur.fetchone()
@@ -782,6 +814,11 @@ class Database:
                     raise ValueError("offer_not_found")
                 if offer['status'] != 'active':
                     raise ValueError(f"offer_already_{offer['status']}")
+                
+                # Проверяем срок действия
+                if offer['expires_at'] and datetime.now(timezone.utc) > offer['expires_at']:
+                    await conn.execute("UPDATE offers SET status = 'expired' WHERE id = %s", (offer_id,))
+                    raise ValueError("offer_expired")
                 
                 # 2. Получаем продавца
                 async with conn.cursor(row_factory=dict_row) as cur:
@@ -818,14 +855,26 @@ class Database:
                 # 6. Увеличиваем счетчик транзакций
                 await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id IN (%s, %s)", (buyer['id'], seller['id']))
                 
-                # 7. Обновляем статус объявления
-                await conn.execute("UPDATE offers SET status = 'sold', buyer_id = %s WHERE id = %s", (buyer['id'], offer_id))
+                # 7. Уменьшаем количество и обновляем статус
+                new_quantity = offer['quantity'] - 1
+                new_status = 'sold' if new_quantity <= 0 else 'active'
+                
+                await conn.execute(
+                    "UPDATE offers SET quantity = %s, status = %s, buyer_id = %s WHERE id = %s",
+                    (new_quantity, new_status, buyer['id'], offer_id)
+                )
+                
+                # Получаем обновленное объявление
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT * FROM offers WHERE id = %s", (offer_id,))
+                    updated_offer = await cur.fetchone()
                 
                 return {
-                    "offer": offer,
+                    "offer": updated_offer,
                     "seller": seller,
                     "buyer": buyer,
-                    "price": price
+                    "price": price,
+                    "remaining_quantity": new_quantity
                 }
 
     async def cancel_offer(self, offer_id: int, user_telegram_id: int) -> bool:

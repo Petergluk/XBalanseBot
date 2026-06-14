@@ -142,3 +142,66 @@ class TestOffers:
         # Пытаемся купить
         with pytest.raises(ValueError, match="offer_already_cancelled"):
             await db.execute_offer_purchase(offer_id, buyer_telegram_id=9002)
+
+    async def test_create_with_quantity_and_duration(self, db):
+        seller, _ = await self._setup_users(db)
+        offer_id = await db.create_offer(
+            seller_telegram_id=9001,
+            title="Опт",
+            description="Оптовый товар",
+            price=Decimal("10"),
+            photo_id=None,
+            quantity=5,
+            duration_days=3
+        )
+        offer = await db.get_offer(offer_id)
+        assert offer['quantity'] == 5
+        assert offer['expires_at'] is not None
+
+    async def test_multiple_purchases_decrement(self, db):
+        seller, buyer = await self._setup_users(db, balance_seller=Decimal("0"), balance_buyer=Decimal("100"))
+        offer_id = await db.create_offer(
+            seller_telegram_id=9001,
+            title="Товар",
+            description="Описание",
+            price=Decimal("10"),
+            photo_id=None,
+            quantity=2,
+            duration_days=5
+        )
+        
+        # Первая покупка: количество должно стать 1, статус остаться active
+        res1 = await db.execute_offer_purchase(offer_id, buyer_telegram_id=9002)
+        assert res1['remaining_quantity'] == 1
+        assert res1['offer']['status'] == 'active'
+        assert res1['offer']['quantity'] == 1
+        
+        # Вторая покупка: количество должно стать 0, статус sold
+        res2 = await db.execute_offer_purchase(offer_id, buyer_telegram_id=9002)
+        assert res2['remaining_quantity'] == 0
+        assert res2['offer']['status'] == 'sold'
+        assert res2['offer']['quantity'] == 0
+
+    async def test_purchase_expired(self, db):
+        seller, buyer = await self._setup_users(db, balance_seller=Decimal("0"), balance_buyer=Decimal("100"))
+        offer_id = await db.create_offer(
+            seller_telegram_id=9001,
+            title="Старый товар",
+            description="Описание",
+            price=Decimal("10"),
+            photo_id=None,
+            quantity=1,
+            duration_days=7
+        )
+        
+        # Искусственно устанавливаем expires_at в прошлое
+        async with db.pool.connection() as conn:
+            await conn.execute("UPDATE offers SET expires_at = CURRENT_TIMESTAMP - interval '1 hour' WHERE id = %s", (offer_id,))
+            
+        # Пытаемся купить
+        with pytest.raises(ValueError, match="offer_expired"):
+            await db.execute_offer_purchase(offer_id, buyer_telegram_id=9002)
+            
+        # Убеждаемся, что статус предложения обновился на expired в БД
+        offer = await db.get_offer(offer_id)
+        assert offer['status'] == 'expired'

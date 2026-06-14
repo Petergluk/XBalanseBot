@@ -123,11 +123,13 @@ class TagRuleCreationStates(StatesGroup):
 class OfferCreationStates(StatesGroup):
     """
     Состояния для FSM создания нового объявления о продаже/обмене.
-    data: `message_ids`, `title`, `description`, `price`, `photo_id`, `confirm_msg_id`
+    data: `message_ids`, `title`, `description`, `price`, `quantity`, `duration_days`, `photo_id`, `confirm_msg_id`
     """
     waiting_for_title = State()
     waiting_for_description = State()
     waiting_for_price = State()
+    waiting_for_quantity = State()
+    waiting_for_duration = State()
     waiting_for_photo = State()
     waiting_for_confirmation = State()
 

@@ -18,6 +18,8 @@ from app.keyboards import (
     get_offer_confirm_keyboard,
     get_offer_photo_skip_keyboard,
     get_offer_desc_skip_keyboard,
+    get_offer_quantity_skip_keyboard,
+    get_offer_duration_skip_keyboard,
     get_main_menu_keyboard
 )
 from app.utils import ensure_user_exists, get_user_balance, format_amount
@@ -188,6 +190,116 @@ async def process_offer_price(message: Message, state: FSMContext, bot: Bot):
         
     await state.update_data(price=float(price))
     
+    # Запрашиваем количество
+    prompt = await message.answer(
+        LEXICON_RU["msg_offer_prompt_quantity"],
+        parse_mode="HTML",
+        reply_markup=get_offer_quantity_skip_keyboard()
+    )
+    message_ids.append(prompt.message_id)
+    await state.update_data(message_ids=message_ids)
+    await state.set_state(OfferCreationStates.waiting_for_quantity)
+
+
+# --- Ввод количества (или пропуск) ---
+@router.callback_query(GeneralAction.filter(F.action == "skip_quantity"), OfferCreationStates.waiting_for_quantity)
+async def process_offer_quantity_skip(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    message_ids.append(callback.message.message_id)
+    
+    await state.update_data(quantity=1, message_ids=message_ids)
+    
+    # Запрашиваем срок действия
+    prompt = await callback.message.answer(
+        LEXICON_RU["msg_offer_prompt_duration"],
+        parse_mode="HTML",
+        reply_markup=get_offer_duration_skip_keyboard()
+    )
+    message_ids.append(prompt.message_id)
+    await state.update_data(message_ids=message_ids)
+    await state.set_state(OfferCreationStates.waiting_for_duration)
+    await callback.answer()
+
+
+@router.message(OfferCreationStates.waiting_for_quantity)
+async def process_offer_quantity(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    message_ids.append(message.message_id)
+    
+    qty_str = (message.text or "").strip()
+    try:
+        quantity = int(qty_str)
+        if quantity <= 0:
+            raise ValueError()
+    except ValueError:
+        # Ошибка ввода количества
+        prompt = await message.answer(
+            LEXICON_RU["err_offer_quantity_invalid"],
+            reply_markup=get_offer_quantity_skip_keyboard()
+        )
+        message_ids.append(prompt.message_id)
+        await state.update_data(message_ids=message_ids)
+        return
+        
+    await state.update_data(quantity=quantity)
+    
+    # Запрашиваем срок действия
+    prompt = await message.answer(
+        LEXICON_RU["msg_offer_prompt_duration"],
+        parse_mode="HTML",
+        reply_markup=get_offer_duration_skip_keyboard()
+    )
+    message_ids.append(prompt.message_id)
+    await state.update_data(message_ids=message_ids)
+    await state.set_state(OfferCreationStates.waiting_for_duration)
+
+
+# --- Ввод срока действия (или пропуск) ---
+@router.callback_query(GeneralAction.filter(F.action == "skip_duration"), OfferCreationStates.waiting_for_duration)
+async def process_offer_duration_skip(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    message_ids.append(callback.message.message_id)
+    
+    await state.update_data(duration_days=7, message_ids=message_ids)
+    
+    # Запрашиваем фото
+    prompt = await callback.message.answer(
+        LEXICON_RU["msg_offer_prompt_photo"],
+        parse_mode="HTML",
+        reply_markup=get_offer_photo_skip_keyboard()
+    )
+    message_ids.append(prompt.message_id)
+    await state.update_data(message_ids=message_ids)
+    await state.set_state(OfferCreationStates.waiting_for_photo)
+    await callback.answer()
+
+
+@router.message(OfferCreationStates.waiting_for_duration)
+async def process_offer_duration(message: Message, state: FSMContext, bot: Bot):
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    message_ids.append(message.message_id)
+    
+    dur_str = (message.text or "").strip()
+    try:
+        duration_days = int(dur_str)
+        if not (1 <= duration_days <= 30):
+            raise ValueError()
+    except ValueError:
+        # Ошибка ввода срока действия
+        prompt = await message.answer(
+            LEXICON_RU["err_offer_duration_invalid"],
+            reply_markup=get_offer_duration_skip_keyboard()
+        )
+        message_ids.append(prompt.message_id)
+        await state.update_data(message_ids=message_ids)
+        return
+        
+    await state.update_data(duration_days=duration_days)
+    
     # Запрашиваем фото
     prompt = await message.answer(
         LEXICON_RU["msg_offer_prompt_photo"],
@@ -198,6 +310,7 @@ async def process_offer_price(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(message_ids=message_ids)
     await state.set_state(OfferCreationStates.waiting_for_photo)
 
+
 # --- Ввод фото (или пропуск) ---
 async def show_offer_preview(chat_id: int, state: FSMContext, bot: Bot):
     """Показывает предпросмотр объявления перед подтверждением публикации."""
@@ -205,6 +318,8 @@ async def show_offer_preview(chat_id: int, state: FSMContext, bot: Bot):
     title = data['title']
     description = data.get('description')
     price = data['price']
+    quantity = data.get('quantity', 1)
+    duration_days = data.get('duration_days', 7)
     photo_id = data.get('photo_id')
     message_ids = data.get('message_ids', [])
     
@@ -212,12 +327,21 @@ async def show_offer_preview(chat_id: int, state: FSMContext, bot: Bot):
     user = await db.get_user(telegram_id=chat_id)
     seller_username = user['username'] if user and user['username'] else f"id{chat_id}"
     
+    quantity_part = f"<b>Количество:</b> {quantity} шт.\n" if quantity > 1 else ""
+    
+    from datetime import datetime, timedelta
+    expires_dt = datetime.now() + timedelta(days=duration_days)
+    expires_str = expires_dt.strftime("%d.%m.%Y")
+    expiry_part = f"<b>Срок действия:</b> до {expires_str}\n"
+    
     card_text = LEXICON_RU["msg_offer_card"].format(
         title=title,
         desc_part=desc_part,
         price=price,
         currency_symbol=CURRENCY_SYMBOL,
-        seller_username=seller_username
+        seller_username=seller_username,
+        quantity_part=quantity_part,
+        expiry_part=expiry_part
     )
     
     preview_text = LEXICON_RU["msg_offer_preview_header"] + card_text + LEXICON_RU["msg_offer_preview_confirm"]
@@ -244,6 +368,7 @@ async def show_offer_preview(chat_id: int, state: FSMContext, bot: Bot):
     await state.update_data(message_ids=message_ids, confirm_msg_id=prompt.message_id)
     await state.set_state(OfferCreationStates.waiting_for_confirmation)
 
+
 @router.callback_query(GeneralAction.filter(F.action == "skip_photo"), OfferCreationStates.waiting_for_photo)
 async def process_offer_photo_skip(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -253,6 +378,7 @@ async def process_offer_photo_skip(callback: CallbackQuery, state: FSMContext, b
     await state.update_data(photo_id=None, message_ids=message_ids)
     await show_offer_preview(callback.message.chat.id, state, bot)
     await callback.answer()
+
 
 @router.message(OfferCreationStates.waiting_for_photo)
 async def process_offer_photo(message: Message, state: FSMContext, bot: Bot):
@@ -275,6 +401,7 @@ async def process_offer_photo(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(photo_id=photo_id, message_ids=message_ids)
     await show_offer_preview(message.chat.id, state, bot)
 
+
 # --- Подтверждение публикации (кнопка Опубликовать) ---
 @router.callback_query(OfferAction.filter(F.action == "publish"), OfferCreationStates.waiting_for_confirmation)
 async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAction, state: FSMContext, bot: Bot):
@@ -283,6 +410,8 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
     description = data.get('description')
     price = data['price']
     photo_id = data.get('photo_id')
+    quantity = data.get('quantity', 1)
+    duration_days = data.get('duration_days', 7)
     
     user_id = callback.from_user.id
     user = await db.get_user(telegram_id=user_id)
@@ -297,7 +426,9 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
             title=title,
             description=description,
             price=price,
-            photo_id=photo_id
+            photo_id=photo_id,
+            quantity=quantity,
+            duration_days=duration_days
         )
     except Exception as e:
         logger.error(f"Error creating offer: {e}")
@@ -308,6 +439,12 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
     await cleanup_offer_dialog(state, bot, callback.message.chat.id)
     
     # 3. Форматируем карточку для группы
+    offer = await db.get_offer(offer_id)
+    expires_str = offer['expires_at'].strftime("%d.%m.%Y")
+    
+    quantity_part = f"<b>Количество:</b> {quantity} шт.\n" if quantity > 1 else ""
+    expiry_part = f"<b>Срок действия:</b> до {expires_str}\n"
+    
     desc_part = f"<b>Описание:</b> {description}\n" if description else ""
     seller_username = user['username'] if user['username'] else f"id{user_id}"
     card_text = LEXICON_RU["msg_offer_card"].format(
@@ -315,11 +452,21 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
         desc_part=desc_part,
         price=price,
         currency_symbol=CURRENCY_SYMBOL,
-        seller_username=seller_username
+        seller_username=seller_username,
+        quantity_part=quantity_part,
+        expiry_part=expiry_part
     )
     
     keyboard = get_offer_group_keyboard(offer_id, price)
     
+    # Получаем ID топика для биржи обмена
+    market_thread_str = await db.get_setting("market_thread_id")
+    message_thread_id = None
+    if market_thread_str and market_thread_str.isdigit():
+        thread_val = int(market_thread_str)
+        if thread_val > 0:
+            message_thread_id = thread_val
+            
     # 4. Отправляем в группу
     try:
         if photo_id:
@@ -328,14 +475,16 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
                 photo=photo_id,
                 caption=card_text,
                 parse_mode="HTML",
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                message_thread_id=message_thread_id
             )
         else:
             msg = await bot.send_message(
                 chat_id=MAIN_GROUP_ID,
                 text=card_text,
                 parse_mode="HTML",
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                message_thread_id=message_thread_id
             )
             
         # Записываем ID сообщения в БД
@@ -349,10 +498,12 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
     await callback.message.answer(LEXICON_RU["msg_offer_created_success"])
     await callback.answer()
 
+
 # --- Отмена диалога создания (по кнопке Отмена) ---
 @router.callback_query(GeneralAction.filter(F.action == "cancel_dialog"), OfferCreationStates)
 async def process_offer_cancel_btn(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await cancel_offer_creation(callback, state, bot)
+
 
 # --- Покупка предложения (Callback в группе) ---
 @router.callback_query(OfferAction.filter(F.action == "buy"))
@@ -374,42 +525,83 @@ async def process_offer_buy(callback: CallbackQuery, callback_data: OfferAction,
         seller = res['seller']
         buyer = res['buyer']
         price = res['price']
+        remaining_quantity = res['remaining_quantity']
         
         # Сделка успешна!
         # 1. Отвечаем во всплывающем окне
         await callback.answer("✅ Покупка успешно совершена!", show_alert=True)
         
-        # 2. Обновляем сообщение в группе на ПРОДАНО
+        # 2. Обновляем сообщение в группе
         seller_username = seller['username'] if seller['username'] else f"id{seller['telegram_id']}"
         buyer_username = buyer['username'] if buyer['username'] else f"id{buyer['telegram_id']}"
         
-        sold_text = LEXICON_RU["msg_offer_card_sold"].format(
-            title=offer['title'],
-            seller_username=seller_username,
-            buyer_username=buyer_username,
-            price=price,
-            currency_symbol=CURRENCY_SYMBOL
-        )
-        
-        try:
-            if offer['photo_id']:
-                await bot.edit_message_caption(
-                    chat_id=callback.message.chat.id,
-                    message_id=callback.message.message_id,
-                    caption=sold_text,
-                    parse_mode="HTML",
-                    reply_markup=None # Убираем кнопку
-                )
-            else:
-                await bot.edit_message_text(
-                    chat_id=callback.message.chat.id,
-                    message_id=callback.message.message_id,
-                    text=sold_text,
-                    parse_mode="HTML",
-                    reply_markup=None # Убираем кнопку
-                )
-        except Exception as e:
-            logger.error(f"Error editing message to sold: {e}")
+        if remaining_quantity > 0:
+            # Сделка совершена, но товар еще остался
+            desc_part = f"<b>Описание:</b> {offer['description']}\n" if offer['description'] else ""
+            quantity_part = f"<b>Количество:</b> {remaining_quantity} шт.\n" if remaining_quantity > 1 else ""
+            
+            expires_str = offer['expires_at'].strftime("%d.%m.%Y")
+            expiry_part = f"<b>Срок действия:</b> до {expires_str}\n"
+            
+            updated_card_text = LEXICON_RU["msg_offer_card"].format(
+                title=offer['title'],
+                desc_part=desc_part,
+                price=price,
+                currency_symbol=CURRENCY_SYMBOL,
+                seller_username=seller_username,
+                quantity_part=quantity_part,
+                expiry_part=expiry_part
+            )
+            keyboard = get_offer_group_keyboard(offer_id, price)
+            
+            try:
+                if offer['photo_id']:
+                    await bot.edit_message_caption(
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                        caption=updated_card_text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                        text=updated_card_text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+            except Exception as e:
+                logger.error(f"Error editing message caption on decrement: {e}")
+        else:
+            # Товара больше нет — сделка полностью завершена
+            sold_text = LEXICON_RU["msg_offer_card_sold"].format(
+                title=offer['title'],
+                seller_username=seller_username,
+                buyer_username=buyer_username,
+                price=price,
+                currency_symbol=CURRENCY_SYMBOL
+            )
+            
+            try:
+                if offer['photo_id']:
+                    await bot.edit_message_caption(
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                        caption=sold_text,
+                        parse_mode="HTML",
+                        reply_markup=None # Убираем кнопку
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                        text=sold_text,
+                        parse_mode="HTML",
+                        reply_markup=None # Убираем кнопку
+                    )
+            except Exception as e:
+                logger.error(f"Error editing message to sold: {e}")
             
         # 3. Отправляем уведомления продавцу и покупателю
         # Продавцу
@@ -454,6 +646,8 @@ async def process_offer_buy(callback: CallbackQuery, callback_data: OfferAction,
             await callback.answer(LEXICON_RU["err_offer_already_cancelled"], show_alert=True)
         elif err_msg == "offer_not_found":
             await callback.answer(LEXICON_RU["err_offer_not_found"], show_alert=True)
+        elif err_msg == "offer_expired":
+            await callback.answer(LEXICON_RU["err_offer_expired"], show_alert=True)
         else:
             logger.error(f"Purchase error: {err_msg}")
             await callback.answer("❌ Ошибка при проведении сделки.", show_alert=True)

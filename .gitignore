@@ -47,6 +47,8 @@ env/
 .env
 .env.*
 *.env
+koyeb.yaml
+render.yaml
 
 # Файлы IDE
 .idea/

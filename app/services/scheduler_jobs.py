@@ -9,6 +9,7 @@
 - Теперь используется гибридная модель: базовые подписчики + разовые регистрации/отмены из таблицы `event_registration_overrides`.
 """
 import logging
+import html
 from datetime import datetime, date
 from decimal import Decimal
 from aiogram import Bot
@@ -129,6 +130,7 @@ async def run_event_reminder(event_id: int, bot: Bot, scheduled_start_dt: dateti
 async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: datetime | None = None):
     """Обрабатывает списания для конкретного наступившего события."""
     event_name = event['name'] or event['activity_name']
+    escaped_event_name = html.escape(event_name)
     fee = event['cost']
     
     next_run_dt = event_start_dt or get_next_run_time(
@@ -160,23 +162,72 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
     async with db.pool.connection() as conn:
         async with conn.transaction():
             for user in participants:
-                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
-                await conn.execute(
-                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
-                    (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
-                )
-                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+                # Получаем текущий баланс и статус кредита с блокировкой строки
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute("SELECT balance, grace_credit_used FROM users WHERE id = %s FOR UPDATE", (user['id'],))
+                    db_user = await cur.fetchone()
                 
-                start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
-                notification_text = (
-                    f"▶️ <b>Начинается событие: «{event_name}»</b>\n"
-                    f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
-                    f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие."
-                )
-                try:
-                    await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML")
-                except Exception as e:
-                    logger.warning(f"Failed to send payment notification to user {user['telegram_id']}: {e}")
+                if not db_user:
+                    continue
+                
+                balance = db_user['balance']
+                grace_credit_used = db_user['grace_credit_used']
+                
+                if balance >= fee:
+                    # Обычная оплата
+                    await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
+                    await conn.execute(
+                        "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
+                        (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
+                    )
+                    await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+                    
+                    start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
+                    notification_text = (
+                        f"▶️ <b>Начинается событие: «{escaped_event_name}»</b>\n"
+                        f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
+                        f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие."
+                    )
+                    try:
+                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML")
+                    except Exception as e:
+                        logger.warning(f"Failed to send payment notification to user {user['telegram_id']}: {e}")
+                        
+                elif not grace_credit_used:
+                    # Отложенный платеж: предлагаем взять кредит
+                    from app.callbacks import GraceCreditAction
+                    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="💳 Взять кредит доверия",
+                            callback_data=GraceCreditAction(event_id=event['id']).pack()
+                        )
+                    ]])
+                    
+                    start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
+                    notification_text = (
+                        f"⚠️ <b>Предстоящее событие: «{escaped_event_name}»</b>{start_time_str}\n\n"
+                        f"❌ Недостаточно средств для участия (стоимость: <b>{format_amount(fee)} {CURRENCY_SYMBOL}</b>, ваш баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>).\n\n"
+                        f"Вы можете воспользоваться разовым кредитом доверия из фонда, чтобы подтвердить участие и получить ссылку на событие."
+                    )
+                    try:
+                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML", reply_markup=keyboard)
+                    except Exception as e:
+                        logger.warning(f"Failed to send grace credit offer to user {user['telegram_id']}: {e}")
+                        
+                else:
+                    # Кредит уже использован, участие приостановлено, не присылаем ссылку
+                    notification_text = (
+                        f"⚠️ <b>Предстоящее событие: «{escaped_event_name}»</b>\n\n"
+                        f"❌ <b>Участие приостановлено.</b>\n"
+                        f"Недостаточно средств для участия (стоимость: {format_amount(fee)} {CURRENCY_SYMBOL}), а лимит кредита доверия уже исчерпан.\n"
+                        f"Пожалуйста, пополните ваш баланс для возобновления участия."
+                    )
+                    try:
+                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML")
+                    except Exception as e:
+                        logger.warning(f"Failed to send payment failure notification to user {user['telegram_id']}: {e}")
     
     logger.info(f"Successfully processed payments for event {event['id']}.")
 
@@ -267,33 +318,41 @@ async def process_demurrage(bot: Bot):
     try:
         users_processed = 0
         total_demurrage = Decimal('0')
+        last_processed_id = 0
+        batch_size = 100
+        fund_user_id = SYSTEM_FUND_USER_ID
+        comment_text = f"Демерредж {rate*100}%"
         
-        async with db.pool.connection() as conn:
-            async with conn.transaction():
-                async with conn.cursor(row_factory=dict_row) as cur:
-                    await cur.execute("SELECT id, balance FROM users WHERE balance > 0 AND telegram_id != 0 FOR UPDATE")
-                    users_to_tax = await cur.fetchall()
-
-                if not users_to_tax:
-                    logger.info("No users with positive balance found. Demurrage process finished.")
-                    # return out of transaction safely, then save last_run
-                else:
-                    fund_user_id = SYSTEM_FUND_USER_ID
-                    comment_text = f"Демерредж {rate*100}%"
+        import asyncio
+        
+        while True:
+            updates_to_run = []
+            inserts_to_run = []
+            batch_demurrage = Decimal('0')
+            
+            async with db.pool.connection() as conn:
+                async with conn.transaction():
+                    async with conn.cursor(row_factory=dict_row) as cur:
+                        await cur.execute(
+                            "SELECT id, balance FROM users WHERE balance > 0 AND telegram_id != 0 AND id > %s ORDER BY id LIMIT %s FOR UPDATE",
+                            (last_processed_id, batch_size)
+                        )
+                        users_batch = await cur.fetchall()
                     
-                    updates_to_run = []
-                    inserts_to_run = []
+                    if not users_batch:
+                        break
                     
-                    for user in users_to_tax:
+                    for user in users_batch:
                         demurrage_amount = (user['balance'] * rate).quantize(Decimal('0.0001'))
+                        last_processed_id = user['id']
+                        
                         if demurrage_amount <= 0: 
                             continue
                         
                         updates_to_run.append((demurrage_amount, user['id']))
                         inserts_to_run.append((user['id'], fund_user_id, demurrage_amount, "demurrage", comment_text))
                         
-                        total_demurrage += demurrage_amount
-                        users_processed += 1
+                        batch_demurrage += demurrage_amount
                         
                     if updates_to_run:
                         async with conn.cursor() as batch_cur:
@@ -303,13 +362,19 @@ async def process_demurrage(bot: Bot):
                                 inserts_to_run
                             )
                         
-                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (total_demurrage, fund_user_id))
+                        await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (batch_demurrage, fund_user_id))
+                        
+                        total_demurrage += batch_demurrage
+                        users_processed += len(updates_to_run)
+            
+            await asyncio.sleep(0.05)
         
-        # Если транзакция не выбросила исключение, смело ставим дату последнего запуска
         await db.set_setting('demurrage_last_run', date.today().isoformat())
         
         if users_processed > 0:
             logger.info(f"Demurrage successfully processed for {users_processed} users. Total amount: {format_amount(total_demurrage)} {CURRENCY_SYMBOL}.")
+        else:
+            logger.info("No users with positive balance found. Demurrage process finished.")
             
     except Exception as e:
-        logger.error(f"An error occurred during demurrage process. Transaction rolled back. Error: {e}", exc_info=True)
+        logger.error(f"An error occurred during demurrage process. Error: {e}", exc_info=True)

@@ -1,0 +1,71 @@
+# XBalanseBot - Koyeb Configuration Template
+# ⚠️ WARNING: This is a TEMPLATE. Do NOT commit real secrets!
+# Copy this file to koyeb.yaml and fill in your actual values.
+# Keep koyeb.yaml out of version control (.gitignore includes it).
+
+services:
+  - name: bot
+    type: web
+    git:
+      repository: Petergluk/XBalanseBot
+      branch: master
+      no_deploy_on_push: false
+      builder: docker
+      docker:
+        dockerfile: Dockerfile
+    regions:
+      - was  # Washington D.C. (change to: fra, sin, tyo, par, sfo)
+    instance_types:
+      - type: free  # or: eco-nano, nano, micro, etc.
+    scalings:
+      - min: 0
+        max: 1
+    ports:
+      - port: 8080
+        protocol: http
+    routes:
+      - path: /
+        port: 8080
+    env:
+      # ⚠️ Replace ALL placeholder values with your actual secrets
+      
+      # Telegram Bot Token (from @BotFather)
+      - key: BOT_TOKEN
+        value: "YOUR_BOT_TOKEN_HERE"
+      
+      # PostgreSQL Connection String (e.g., Supabase, Neon, Aiven)
+      - key: DATABASE_URL
+        value: "postgresql://user:password@host:port/database"
+      
+      # Redis Connection String (e.g., Upstash, Aiven)
+      - key: REDIS_URL
+        value: "rediss://user:password@host:port"
+      
+      # Development Mode (True for polling, False for webhook)
+      - key: DEV_MODE
+        value: "False"
+      
+      # Telegram Group ID (your community group)
+      - key: MAIN_GROUP_ID
+        value: "-1001234567890"
+      
+      # Super Admin Telegram ID (your Telegram user ID)
+      - key: SUPER_ADMIN_ID
+        value: "123456789"
+      
+      # Webhook Host (your Koyeb app domain)
+      - key: WEBHOOK_HOST
+        value: "your-app-name.koyeb.app"
+      
+      # Telegram Webhook Secret Token (generate with: openssl rand -hex 32)
+      - key: WEBHOOK_SECRET_TOKEN
+        value: "YOUR_SECRET_TOKEN_HERE"
+      
+      # Tribute Payment Secret (if using Tribute payments)
+      - key: TRIBUTE_WEBHOOK_SECRET
+        value: "YOUR_TRIBUTE_SECRET_HERE"
+
+# After configuring:
+# 1. DO NOT commit this file with real values
+# 2. Use Koyeb's Secrets management in the dashboard instead
+# 3. Or use environment variables from Koyeb UI

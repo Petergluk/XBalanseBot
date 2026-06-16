@@ -543,3 +543,170 @@ class TestGroupRestrictions:
         
         handler.assert_called_once()
         assert res == "OK"
+
+
+# =============================================================================
+# Tests: Grace Credit Callback
+# =============================================================================
+
+class TestGraceCreditCallback:
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.event_handlers.db")
+    async def test_grace_credit_success(self, mock_db):
+        """Успешное получение кредита доверия при недостаточном балансе."""
+        from app.handlers.event_handlers import process_grace_credit_click
+        from app.callbacks import GraceCreditAction
+        from contextlib import asynccontextmanager
+
+        # Mock user and event in main db queries
+        mock_db.get_user = AsyncMock(return_value={'id': 42, 'telegram_id': 12345, 'balance': Decimal('5'), 'grace_credit_used': False})
+        mock_db.get_event = AsyncMock(return_value={'id': 100, 'cost': Decimal('10'), 'name': 'Yoga', 'activity_name': None, 'event_date': None, 'link': 'http://yoga'})
+
+        # Mock database connection and cursor
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock()
+        mock_tx = MagicMock()
+        
+        mock_cur = MagicMock()
+        mock_cur.execute = AsyncMock()
+        mock_cur.fetchone = AsyncMock(return_value={'balance': Decimal('5'), 'grace_credit_used': False})
+
+        @asynccontextmanager
+        async def mock_cur_ctx(*args, **kwargs):
+            yield mock_cur
+            
+        @asynccontextmanager
+        async def mock_tx_ctx(*args, **kwargs):
+            yield mock_tx
+            
+        @asynccontextmanager
+        async def mock_conn_ctx(*args, **kwargs):
+            yield mock_conn
+
+        mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
+        mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
+        mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
+
+        # Create mock callback query
+        cb = make_callback(data="grace_credit:100", user_id=12345)
+        cb.message.edit_text = AsyncMock()
+        
+        cb_data = GraceCreditAction(event_id=100)
+        bot_mock = AsyncMock()
+
+        # Run handler
+        await process_grace_credit_click(cb, cb_data, bot_mock)
+
+        # Verify balance updated in db (with grace_credit_used = TRUE)
+        # UPDATE users SET balance = balance - %s, grace_credit_used = TRUE WHERE id = %s
+        update_call = mock_conn.execute.call_args_list[0][0]
+        assert "grace_credit_used = TRUE" in update_call[0]
+        assert update_call[1] == (Decimal('10'), 42)
+
+        # Verify message edited
+        cb.message.edit_text.assert_called_once()
+        assert "Вы получили кредит" in cb.message.edit_text.call_args[0][0]
+        cb.answer.assert_called_once_with("✅ Кредит получен, участие подтверждено!")
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.event_handlers.db")
+    async def test_grace_credit_balance_already_sufficient(self, mock_db):
+        """Если у пользователя внезапно хватает баланса, списываем без активации кредита."""
+        from app.handlers.event_handlers import process_grace_credit_click
+        from app.callbacks import GraceCreditAction
+        from contextlib import asynccontextmanager
+
+        mock_db.get_user = AsyncMock(return_value={'id': 42, 'telegram_id': 12345, 'balance': Decimal('20'), 'grace_credit_used': False})
+        mock_db.get_event = AsyncMock(return_value={'id': 100, 'cost': Decimal('10'), 'name': 'Yoga', 'activity_name': None, 'event_date': None, 'link': 'http://yoga'})
+
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock()
+        mock_tx = MagicMock()
+        
+        mock_cur = MagicMock()
+        mock_cur.execute = AsyncMock()
+        mock_cur.fetchone = AsyncMock(return_value={'balance': Decimal('20'), 'grace_credit_used': False})
+
+        @asynccontextmanager
+        async def mock_cur_ctx(*args, **kwargs):
+            yield mock_cur
+            
+        @asynccontextmanager
+        async def mock_tx_ctx(*args, **kwargs):
+            yield mock_tx
+            
+        @asynccontextmanager
+        async def mock_conn_ctx(*args, **kwargs):
+            yield mock_conn
+
+        mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
+        mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
+        mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
+
+        cb = make_callback(data="grace_credit:100", user_id=12345)
+        cb.message.edit_text = AsyncMock()
+        
+        cb_data = GraceCreditAction(event_id=100)
+        bot_mock = AsyncMock()
+
+        await process_grace_credit_click(cb, cb_data, bot_mock)
+
+        # UPDATE users SET balance = balance - %s WHERE id = %s (без grace_credit_used = TRUE)
+        update_call = mock_conn.execute.call_args_list[0][0]
+        assert "grace_credit_used = TRUE" not in update_call[0]
+        assert update_call[1] == (Decimal('10'), 42)
+
+        cb.message.edit_text.assert_called_once()
+        assert "кредит не использован" in cb.message.edit_text.call_args[0][0]
+        cb.answer.assert_called_once_with("✅ Участие подтверждено!")
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.event_handlers.db")
+    async def test_grace_credit_already_used(self, mock_db):
+        """Если кредит уже использован, отклоняем запрос."""
+        from app.handlers.event_handlers import process_grace_credit_click
+        from app.callbacks import GraceCreditAction
+        from contextlib import asynccontextmanager
+
+        mock_db.get_user = AsyncMock(return_value={'id': 42, 'telegram_id': 12345, 'balance': Decimal('5'), 'grace_credit_used': True})
+        mock_db.get_event = AsyncMock(return_value={'id': 100, 'cost': Decimal('10'), 'name': 'Yoga', 'activity_name': None, 'event_date': None, 'link': 'http://yoga'})
+
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock()
+        mock_tx = MagicMock()
+        
+        mock_cur = MagicMock()
+        mock_cur.execute = AsyncMock()
+        mock_cur.fetchone = AsyncMock(return_value={'balance': Decimal('5'), 'grace_credit_used': True})
+
+        @asynccontextmanager
+        async def mock_cur_ctx(*args, **kwargs):
+            yield mock_cur
+            
+        @asynccontextmanager
+        async def mock_tx_ctx(*args, **kwargs):
+            yield mock_tx
+            
+        @asynccontextmanager
+        async def mock_conn_ctx(*args, **kwargs):
+            yield mock_conn
+
+        mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
+        mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
+        mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
+
+        cb = make_callback(data="grace_credit:100", user_id=12345)
+        cb.message.edit_reply_markup = AsyncMock()
+        
+        cb_data = GraceCreditAction(event_id=100)
+        bot_mock = AsyncMock()
+
+        await process_grace_credit_click(cb, cb_data, bot_mock)
+
+        # Никаких списаний в БД быть не должно
+        assert mock_conn.execute.call_count == 0
+
+        # Кнопки должны быть удалены
+        cb.message.edit_reply_markup.assert_called_once_with(reply_markup=None)
+        cb.answer.assert_called_once_with("❌ Вы уже использовали свой кредит доверия. Пожалуйста, пополните баланс.", show_alert=True)

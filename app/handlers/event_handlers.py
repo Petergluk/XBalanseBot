@@ -37,14 +37,16 @@ from app.keyboards import (
 )
 from app.states import EventCreationStates, EventEditStates
 from app.utils import is_admin, format_amount, get_next_run_time, format_weekdays
-from app.config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL, SYSTEM_FUND_USER_ID
 from app.lexicon import LEXICON_RU
 from app.services.scheduler_jobs import schedule_event_jobs, remove_event_jobs
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.callbacks import (
     GeneralAction, ActivityAction, EventAction, EventEditAction, EventCreationAction,
-    ConfirmDeleteAction
+    ConfirmDeleteAction, GraceCreditAction
 )
+import html
+from psycopg.rows import dict_row
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -70,12 +72,7 @@ async def cleanup_creation_dialog(bot: Bot, chat_id: int, state: FSMContext):
     await state.clear()
 
 
-def add_message_id_to_state(data: dict, msg_id: int):
-    """Helper for limiting message_ids in state to prevent memory leak."""
-    MAX_IDS = 15
-    msgs = data.get('message_ids', [])
-    msgs.append(msg_id)
-    return msgs[-MAX_IDS:]
+from app.utils import add_message_id_to_state
 
 
 # --- USER COMMANDS ---
@@ -918,3 +915,92 @@ async def update_event_reminder_text(message: Message, state: FSMContext, schedu
         await schedule_event_jobs(event, bot, scheduler)
     await message.answer(LEXICON_RU["msg_event_reminder_updated"])
     await state.clear()
+
+
+@router.callback_query(GraceCreditAction.filter())
+async def process_grace_credit_click(callback: CallbackQuery, callback_data: GraceCreditAction, bot: Bot):
+    event_id = callback_data.event_id
+    user_telegram_id = callback.from_user.id
+    
+    # 1. Получаем пользователя и событие
+    user = await db.get_user(telegram_id=user_telegram_id)
+    event = await db.get_event(event_id)
+    
+    if not user:
+        await callback.answer("❌ Пользователь не найден.", show_alert=True)
+        return
+        
+    if not event:
+        await callback.answer("❌ Событие не найдено или удалено.", show_alert=True)
+        return
+        
+    fee = event['cost']
+    event_name = event['name'] or event['activity_name']
+    escaped_event_name = html.escape(event_name)
+    fund_user_id = SYSTEM_FUND_USER_ID
+    
+    # 2. Оборачиваем в транзакцию с FOR UPDATE на пользователя
+    async with db.pool.connection() as conn:
+        async with conn.transaction():
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT balance, grace_credit_used FROM users WHERE id = %s FOR UPDATE", (user['id'],))
+                db_user = await cur.fetchone()
+                
+            if not db_user:
+                await callback.answer("❌ Пользователь не найден в БД.", show_alert=True)
+                return
+                
+            balance = db_user['balance']
+            grace_credit_used = db_user['grace_credit_used']
+            
+            # 3. Проверяем баланс и кредит повторно (защита от двойного клика)
+            if balance >= fee:
+                # Вдруг баланс уже пополнен? Списываем без кредита!
+                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
+                    (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
+                )
+                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+                
+                # Обновляем сообщение в чате
+                next_run_dt = event['event_date'] or datetime.now()
+                start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')}" if event['event_date'] else ""
+                
+                success_text = (
+                    f"▶️ <b>Вы подтвердили участие в событии: «{escaped_event_name}»</b>\n"
+                    f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
+                    f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие (кредит не использован, так как баланс был достаточен)."
+                )
+                await callback.message.edit_text(success_text, parse_mode="HTML", reply_markup=None)
+                await callback.answer("✅ Участие подтверждено!")
+                return
+                
+            if grace_credit_used:
+                await callback.answer("❌ Вы уже использовали свой кредит доверия. Пожалуйста, пополните баланс.", show_alert=True)
+                await callback.message.edit_reply_markup(reply_markup=None)
+                return
+                
+            # 4. Проводим списание по кредиту доверия
+            await conn.execute(
+                "UPDATE users SET balance = balance - %s, grace_credit_used = TRUE WHERE id = %s",
+                (fee, user['id'])
+            )
+            await conn.execute(
+                "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
+                (user['id'], fund_user_id, fee, f"Оплата за событие (кредит): {event_name}")
+            )
+            await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+            
+            # 5. Обновляем сообщение пользователя
+            next_run_dt = event['event_date'] or datetime.now()
+            start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')}" if event['event_date'] else ""
+            
+            success_text = (
+                f"▶️ <b>Вы получили кредит и подтвердили участие в событии: «{escaped_event_name}»</b>\n"
+                f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
+                f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие в долг.\n"
+                f"Кредит доверия активирован. Пожалуйста, пополните счет перед следующим событием."
+            )
+            await callback.message.edit_text(success_text, parse_mode="HTML", reply_markup=None)
+            await callback.answer("✅ Кредит получен, участие подтверждено!")

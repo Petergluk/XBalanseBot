@@ -115,3 +115,10 @@ class OfferAction(CallbackData, prefix="off"):
     """
     action: str
     offer_id: int
+
+
+class GraceCreditAction(CallbackData, prefix="grace"):
+    """
+    Колбэк для получения кредита доверия для оплаты конкретного события.
+    """
+    event_id: int

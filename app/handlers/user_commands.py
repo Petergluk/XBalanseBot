@@ -35,7 +35,8 @@ from app.keyboards import (get_back_to_menu_keyboard, get_main_menu_keyboard,
 from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
-                       get_user_balance, is_admin, validate_amount)
+                       get_user_balance, is_admin, validate_amount,
+                       add_message_id_to_state)
 from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
@@ -76,8 +77,7 @@ async def _get_history_text(telegram_id: int, days: int = 30) -> str:
 @router.message(Command("cancel"), StateFilter(TransferStates))
 async def cancel_transfer_dialog(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
+    message_ids = add_message_id_to_state(data, message.message_id)
     await state.update_data(message_ids=message_ids)
     
     await cleanup_transfer_dialog(state, bot, message.chat.id)
@@ -216,11 +216,11 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
 @router.message(TransferStates.waiting_for_recipient)
 async def process_recipient_input(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
+    message_ids = add_message_id_to_state(data, message.message_id)
 
     msg_text = (message.text or "").strip()
     if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        await state.update_data(message_ids=message_ids)
         from app.handlers.user_commands import cancel_transfer_dialog
         await cancel_transfer_dialog(message, state, bot)
         return
@@ -228,14 +228,14 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
     recipient_username = message.text.lstrip('@').lower()
     if recipient_username == (message.from_user.username or '').lower():
         sent_message = await message.reply(LEXICON_RU["err_transfer_self_dialog"])
-        message_ids.append(sent_message.message_id)
+        message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
 
     recipient = await db.get_user(username=recipient_username)
     if not recipient:
         sent_message = await message.reply(LEXICON_RU["err_user_not_found_dialog"].format(recipient_username=recipient_username))
-        message_ids.append(sent_message.message_id)
+        message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
     
@@ -246,17 +246,17 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
         LEXICON_RU["msg_transfer_ask_amount"].format(currency_symbol=CURRENCY_SYMBOL, recipient_username=recipient_username),
         reply_markup=get_back_to_menu_keyboard()
     )
-    message_ids.append(sent_message.message_id)
+    message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
 @router.message(TransferStates.waiting_for_amount)
 async def process_amount_input(message: Message, state: FSMContext):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
+    message_ids = add_message_id_to_state(data, message.message_id)
     
     msg_text = (message.text or "").strip()
     if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        await state.update_data(message_ids=message_ids)
         from app.handlers.user_commands import cancel_transfer_dialog
         await cancel_transfer_dialog(message, state, message.bot)
         return
@@ -269,7 +269,7 @@ async def process_amount_input(message: Message, state: FSMContext):
             LEXICON_RU["err_transfer_invalid_amount_dialog"],
             reply_markup=get_back_to_menu_keyboard()
         )
-        message_ids.append(sent_message.message_id)
+        message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
         
@@ -281,7 +281,7 @@ async def process_amount_input(message: Message, state: FSMContext):
             reply_markup=get_back_to_menu_keyboard(),
             parse_mode="HTML"
         )
-        message_ids.append(sent_message.message_id)
+        message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
 
@@ -292,17 +292,17 @@ async def process_amount_input(message: Message, state: FSMContext):
         LEXICON_RU["msg_transfer_ask_comment"],
         reply_markup=get_back_to_menu_keyboard()
     )
-    message_ids.append(sent_message.message_id)
+    message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
 @router.message(TransferStates.waiting_for_comment)
 async def process_comment_input(message: Message, state: FSMContext):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    message_ids.append(message.message_id)
+    message_ids = add_message_id_to_state(data, message.message_id)
     
     msg_text = (message.text or "").strip()
     if msg_text.lower() == "cancel" or msg_text.startswith("/"):
+        await state.update_data(message_ids=message_ids)
         from app.handlers.user_commands import cancel_transfer_dialog
         await cancel_transfer_dialog(message, state, message.bot)
         return
@@ -313,6 +313,7 @@ async def process_comment_input(message: Message, state: FSMContext):
     amount = Decimal(dialog_data['amount'])
     recipient_username = dialog_data['recipient_username']
     
+    from html import escape
     confirmation_text = LEXICON_RU["msg_transfer_confirm"].format(
         recipient_username=recipient_username, amount=format_amount(amount),
         currency_symbol=CURRENCY_SYMBOL, comment=escape(message.text or "")
@@ -320,7 +321,7 @@ async def process_comment_input(message: Message, state: FSMContext):
     
     await state.set_state(TransferStates.waiting_for_confirmation)
     sent_message = await message.answer(confirmation_text, reply_markup=get_transfer_confirmation_keyboard(), parse_mode="HTML")
-    message_ids.append(sent_message.message_id)
+    message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
     await state.update_data(message_ids=message_ids)
 
 @router.callback_query(TransferStates.waiting_for_confirmation, TransferAction.filter(F.action == "confirm"))
@@ -370,8 +371,8 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
             currency_symbol=CURRENCY_SYMBOL,
             comment=escape(comment or "")
         )
-        await bot.send_message(chat_id, response_text, parse_mode="HTML")
         
+        recipient_notified = True
         if recipient['telegram_id'] != 0:
             try:
                 sender_username = escape(sender.username or f"user{sender.id}")
@@ -387,6 +388,12 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
                 )
             except Exception as e:
                 logger.warning(f"Could not send notification to recipient {recipient['telegram_id']}: {e}")
+                recipient_notified = False
+
+        if not recipient_notified:
+            response_text += LEXICON_RU["warning_recipient_not_notified"].format(recipient_username=recipient['username'])
+            
+        await bot.send_message(chat_id, response_text, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Transaction failed between users {sender.id} -> {recipient['telegram_id']}: {e}", exc_info=True)

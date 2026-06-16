@@ -83,6 +83,33 @@ async def logging_middleware(handler, event, data: dict):
     return await handler(event, data)
 
 
+def make_throttling_middleware(storage):
+    async def throttling_middleware(handler, event, data: dict):
+        user = data.get('event_from_user')
+        if not user:
+            return await handler(event, data)
+            
+        redis = storage.redis
+        user_id = user.id
+        
+        is_command = False
+        if isinstance(event, Message):
+            is_command = event.text and event.text.startswith('/')
+            
+        if is_command or isinstance(event, CallbackQuery):
+            key = f"throttle:{user_id}"
+            is_allowed = await redis.set(key, 1, px=500, nx=True)
+            if not is_allowed:
+                if isinstance(event, Message):
+                    await event.reply("⚠️ Слишком быстро! Пожалуйста, подождите немного.")
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("⚠️ Слишком быстро! Подождите...", show_alert=True)
+                return
+                
+        return await handler(event, data)
+    return throttling_middleware
+
+
 async def private_chat_restriction_middleware(handler, event, data: dict):
     """Prevents private-only commands and navigation callbacks from running in groups."""
     is_message = isinstance(event, Message) or (hasattr(event, "text") and isinstance(event.text, str))
@@ -201,6 +228,10 @@ async def main():
     redis_url = REDIS_URL if REDIS_URL else f"redis://{REDIS_HOST}:6379/0"
     storage = RedisStorage.from_url(redis_url, key_builder=DefaultKeyBuilder(with_destiny=True))
     dp = Dispatcher(storage=storage, scheduler=scheduler)
+
+    throttling_middleware = make_throttling_middleware(storage)
+    dp.message.outer_middleware(throttling_middleware)
+    dp.callback_query.outer_middleware(throttling_middleware)
 
     dp.message.outer_middleware(logging_middleware)
     dp.callback_query.outer_middleware(logging_middleware)

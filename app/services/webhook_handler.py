@@ -13,7 +13,17 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 from app.database import db
 from app.utils import format_amount, ensure_user_exists
-from app.config import WEB_SERVER_HOST, WEBHOOK_PORT, TRIBUTE_WEBHOOK_SECRET, WEBHOOK_SECRET_TOKEN
+from app.config import TRIBUTE_WEBHOOK_SECRET, WEBHOOK_SECRET_TOKEN, WEB_SERVER_HOST, WEBHOOK_PORT, REDIS_HOST, REDIS_URL
+import redis.asyncio as redis
+
+_redis_pool = None
+
+async def get_redis():
+    global _redis_pool
+    if not _redis_pool:
+        redis_url = REDIS_URL if REDIS_URL else f"redis://{REDIS_HOST}:6379/0"
+        _redis_pool = redis.from_url(redis_url)
+    return _redis_pool
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +83,13 @@ async def handle_tribute_webhook(request: web.Request):
             payload_canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             payment_ref = f"tribute:hash:{hashlib.sha256(payload_canonical.encode('utf-8')).hexdigest()}"
             logger.warning("Tribute webhook has no payment id. Using payload hash as idempotency key.")
+
+        r = await get_redis()
+        # Блокировка дублей на уровне Redis (срок жизни ключа 1 час)
+        acquired = await r.set(payment_ref, "processing", ex=3600, nx=True)
+        if not acquired:
+            logger.info(f"Duplicate Tribute webhook (caught by Redis) for {payment_ref}.")
+            return web.Response(status=200, text="OK (duplicate)")
 
         await ensure_user_exists(telegram_id, username, is_bot=False)
 

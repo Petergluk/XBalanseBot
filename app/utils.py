@@ -234,3 +234,15 @@ def get_next_run_time(
             return best_target_dt
 
     return None
+
+def add_message_ids_to_state(data: dict, *msg_ids: int) -> list:
+    """Helper for limiting message_ids in state to prevent memory leak."""
+    MAX_IDS = 15
+    msgs = data.get('message_ids', [])
+    msgs = list(msgs)
+    for mid in msg_ids:
+        msgs.append(mid)
+    return msgs[-MAX_IDS:]
+
+def add_message_id_to_state(data: dict, msg_id: int) -> list:
+    return add_message_ids_to_state(data, msg_id)

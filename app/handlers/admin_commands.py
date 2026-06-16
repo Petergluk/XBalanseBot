@@ -181,6 +181,7 @@ async def cmd_check(message: Message):
         balance=format_amount(user['balance']),
         currency_symbol=CURRENCY_SYMBOL,
         is_admin='Да' if user['is_admin'] else 'Нет',
+        grace_credit='Использован' if user['grace_credit_used'] else 'Доступен',
         transaction_count=user['transaction_count'],
         history_text=history_text
     )

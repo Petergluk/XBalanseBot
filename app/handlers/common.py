@@ -140,49 +140,73 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
     logger.info(f"Sent onboarding message to new user {message.from_user.id}")
 
-@router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
-async def process_onboarding_agree(callback: CallbackQuery):
-    """Обработка нажатия кнопки 'Согласен'."""
-    await callback.answer()
-    try:
-        from app.config import MAIN_GROUP_ID
-        import time
-        from app.handlers.tag_reward_handler import get_redis_client
-        
-        user_id = callback.from_user.id
-        redis = get_redis_client()
-        cache_key = f"invite_link:{user_id}"
-        cached_link = await redis.get(cache_key)
-        
-        if cached_link:
-            await callback.message.edit_text(
-                LEXICON_RU["msg_invite_link"].format(invite_link=cached_link),
-                reply_markup=None,
-                disable_web_page_preview=True
-            )
-            return
+async def send_invite_link(target: Message | CallbackQuery):
+    """Генерирует и отправляет пользователю инвайт-ссылку в группу."""
+    from app.config import MAIN_GROUP_ID
+    import time
+    from app.handlers.tag_reward_handler import get_redis_client
+    from app.keyboards import get_back_to_menu_keyboard
+    
+    user_id = target.from_user.id
+    bot = target.bot
+    message_to_edit = target.message if isinstance(target, CallbackQuery) else None
+    
+    redis = get_redis_client()
+    cache_key = f"invite_link:{user_id}"
+    cached_link = await redis.get(cache_key)
+    
+    reply_markup = get_back_to_menu_keyboard()
+    
+    if cached_link:
+        text = LEXICON_RU["msg_invite_link"].format(invite_link=cached_link)
+        if message_to_edit:
+            await message_to_edit.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        else:
+            await target.answer(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        return
 
+    try:
         expire_date = int(time.time()) + 86400  # 24 hours
-        invite_link_obj = await callback.bot.create_chat_invite_link(
+        invite_link_obj = await bot.create_chat_invite_link(
             chat_id=MAIN_GROUP_ID, 
             member_limit=1,
             expire_date=expire_date,
-            name=f"Invite for {callback.from_user.full_name}"
+            name=f"Invite for {target.from_user.full_name}"
         )
         
         await redis.setex(cache_key, 86400, invite_link_obj.invite_link)
         
-        await callback.message.edit_text(
-            LEXICON_RU["msg_invite_link"].format(invite_link=invite_link_obj.invite_link),
-            reply_markup=None,
-            disable_web_page_preview=True
-        )
+        text = LEXICON_RU["msg_invite_link"].format(invite_link=invite_link_obj.invite_link)
+        if message_to_edit:
+            await message_to_edit.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        else:
+            await target.answer(text, reply_markup=reply_markup, disable_web_page_preview=True)
+            
     except Exception as e:
         logger.error(f"Failed to create invite link: {e}")
-        await callback.message.edit_text(
-            LEXICON_RU["err_invite_link"],
-            reply_markup=None
-        )
+        text = LEXICON_RU["err_invite_link"]
+        if message_to_edit:
+            await message_to_edit.edit_text(text, reply_markup=reply_markup)
+        else:
+            await target.answer(text, reply_markup=reply_markup)
+
+@router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
+async def process_onboarding_agree(callback: CallbackQuery):
+    """Обработка нажатия кнопки 'Согласен'."""
+    await callback.answer()
+    await send_invite_link(callback)
+
+@router.callback_query(GeneralAction.filter(F.action == "get_invite_link"))
+async def process_get_invite_link(callback: CallbackQuery):
+    """Обработка нажатия кнопки 'Войти в группу' из главного меню."""
+    await callback.answer()
+    await send_invite_link(callback)
+
+@router.message(Command("join", "link", ignore_case=True))
+async def cmd_join_group(message: Message):
+    """Обработчик команд /join и /link для получения ссылки на группу."""
+    await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
+    await send_invite_link(message)
 
 
 @router.message(Command("help", ignore_case=True))

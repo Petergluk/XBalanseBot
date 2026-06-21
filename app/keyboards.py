@@ -51,6 +51,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_balance"], callback_data=GeneralAction(action="menu_balance_history").pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_help"], callback_data=GeneralAction(action="menu_help").pack())
     )
+    builder.row(
+        InlineKeyboardButton(text="👥 Войти в группу", callback_data=GeneralAction(action="get_invite_link").pack())
+    )
     return builder.as_markup()
 
 def get_onboarding_keyboard() -> InlineKeyboardMarkup:

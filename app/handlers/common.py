@@ -144,27 +144,32 @@ async def send_invite_link(target: Message | CallbackQuery):
     """Генерирует и отправляет пользователю инвайт-ссылку в группу."""
     from app.config import MAIN_GROUP_ID
     import time
-    from app.handlers.tag_reward_handler import get_redis_client
     from app.keyboards import get_back_to_menu_keyboard
     
     user_id = target.from_user.id
     bot = target.bot
     message_to_edit = target.message if isinstance(target, CallbackQuery) else None
     
-    redis = get_redis_client()
-    cache_key = f"invite_link:{user_id}"
-    cached_link = await redis.get(cache_key)
-    
     reply_markup = get_back_to_menu_keyboard()
     
-    if cached_link:
-        text = LEXICON_RU["msg_invite_link"].format(invite_link=cached_link)
+    # 1. Проверяем, не состоит ли пользователь уже в группе
+    is_member = False
+    try:
+        member = await bot.get_chat_member(chat_id=MAIN_GROUP_ID, user_id=user_id)
+        if member.status in ('member', 'administrator', 'creator', 'restricted'):
+            is_member = True
+    except Exception as e:
+        logger.debug(f"Failed to check chat member status: {e}")
+
+    if is_member:
+        text = "Вы уже являетесь участником группы! 🎉"
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+            await message_to_edit.edit_text(text, reply_markup=reply_markup)
         else:
-            await target.answer(text, reply_markup=reply_markup, disable_web_page_preview=True)
+            await target.answer(text, reply_markup=reply_markup)
         return
 
+    # 2. Генерируем новую одноразовую ссылку (не кэшируем, чтобы избежать отправки использованных ссылок)
     try:
         expire_date = int(time.time()) + 86400  # 24 hours
         invite_link_obj = await bot.create_chat_invite_link(
@@ -173,8 +178,6 @@ async def send_invite_link(target: Message | CallbackQuery):
             expire_date=expire_date,
             name=f"Invite for {target.from_user.full_name}"
         )
-        
-        await redis.setex(cache_key, 86400, invite_link_obj.invite_link)
         
         text = LEXICON_RU["msg_invite_link"].format(invite_link=invite_link_obj.invite_link)
         if message_to_edit:

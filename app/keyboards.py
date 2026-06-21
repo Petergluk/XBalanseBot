@@ -65,9 +65,11 @@ def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_menu"], callback_data=GeneralAction(action="main_menu").pack()))
     return builder.as_markup()
 
-def get_back_to_settings_keyboard() -> InlineKeyboardMarkup:
+def get_back_to_settings_keyboard(setting_action: str = None) -> InlineKeyboardMarkup:
     """Клавиатура с одной кнопкой Назад для возврата в меню настроек из FSM."""
     builder = InlineKeyboardBuilder()
+    if setting_action:
+        builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 
@@ -406,7 +408,7 @@ async def get_demurrage_settings_keyboard(is_enabled: bool) -> InlineKeyboardMar
 
 
 
-def get_welcome_group_prompt_keyboard(is_enabled: bool) -> InlineKeyboardMarkup:
+def get_welcome_group_prompt_keyboard(is_enabled: bool, setting_action: str = None) -> InlineKeyboardMarkup:
     """Клавиатура для вложенного промпта редактирования текста группы."""
     builder = InlineKeyboardBuilder()
     if is_enabled:
@@ -417,6 +419,8 @@ def get_welcome_group_prompt_keyboard(is_enabled: bool) -> InlineKeyboardMarkup:
         toggle_callback = SettingsAction(action="toggle_welcome_group", enabled=True).pack()
     
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback))
+    if setting_action:
+        builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 

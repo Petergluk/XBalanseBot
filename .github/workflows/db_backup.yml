@@ -1,0 +1,63 @@
+name: Database Daily Backup
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # Каждый день в 01:00 UTC (04:00 по Московскому времени)
+  workflow_dispatch:     # Позволяет запустить бэкап вручную в интерфейсе GitHub
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Create Database Dump
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "❌ Error: DATABASE_URL secret is not set!"
+            exit 1
+          fi
+          
+          # Создаем имя файла с текущей датой
+          FILENAME="xbalansebot_db_$(date +'%Y-%m-%d_%H-%M-%S').sql"
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
+          
+          echo "[+] Dumping database..."
+          pg_dump "$DATABASE_URL" > "$FILENAME"
+          
+          echo "[+] Compressing dump..."
+          gzip "$FILENAME"
+
+      - name: Send Backup to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "❌ Error: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secrets are not set!"
+            exit 1
+          fi
+          
+          FILE_PATH="${{ env.FILENAME }}.gz"
+          CAPTION="📅 *Резервная копия базы данных XBalanseBot*\n\n"
+          CAPTION+="• Дата: \`$(date +'%Y-%m-%d %H:%M:%S') MSK\`\n"
+          CAPTION+="• Файл: \`$FILE_PATH\`\n"
+          CAPTION+="• Размер: \`$(du -h "$FILE_PATH" | cut -f1)\`"
+          
+          echo "[+] Sending file to Telegram..."
+          curl -f -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F document=@"$FILE_PATH" \
+            -F caption="$CAPTION" \
+            -F parse_mode="MarkdownV2"
+            
+          echo "✅ Backup successfully sent to Telegram!"

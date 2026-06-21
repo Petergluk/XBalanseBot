@@ -281,9 +281,9 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         elif action == "edit_welcome_group":
             from app.keyboards import get_welcome_group_prompt_keyboard
             enabled = (await db.get_setting('welcome_group_enabled', '0')) == '1'
-            kb = get_welcome_group_prompt_keyboard(enabled)
+            kb = get_welcome_group_prompt_keyboard(enabled, setting_action=action)
         else:
-            kb = get_back_to_settings_keyboard()
+            kb = get_back_to_settings_keyboard(setting_action=action)
             
         await callback.message.edit_text(prompt_text, reply_markup=kb, parse_mode="HTML")
         await callback.answer()
@@ -314,6 +314,18 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         kb = get_topics_settings_keyboard()
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await callback.answer()
+
+    elif action.startswith("reset_"):
+        setting_key = action.replace("reset_", "")
+        if setting_key in prompts:
+            desc, db_key, default_val, _ = prompts[setting_key]
+            await db.set_setting(db_key, default_val)
+            await callback.answer(LEXICON_RU["msg_admin_setting_reset_success"], show_alert=True)
+            await state.clear()
+            keyboard = await get_settings_keyboard()
+            await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard)
+        else:
+            await callback.answer("Ошибка: Настройка не найдена.")
 
     elif action == "reset_market_thread":
         await db.set_setting("market_thread_id", "0")

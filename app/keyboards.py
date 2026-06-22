@@ -38,7 +38,7 @@ MONTHS_RU = [
 ]
 ACTIVITY_ICONS = ["🧘‍♀️", "☀️", "🌀", "🌐", "☸️", "☯️", "🕉", "🧿", "🏛", "🥁", "🎨", "📚", "💡", "🚀"]
 
-def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+def get_main_menu_keyboard(is_member: bool = False) -> InlineKeyboardMarkup:
     """Создает клавиатуру главного меню."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_send"], callback_data=GeneralAction(action="menu_send").pack()))
@@ -51,9 +51,10 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_balance"], callback_data=GeneralAction(action="menu_balance_history").pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_menu_help"], callback_data=GeneralAction(action="menu_help").pack())
     )
-    builder.row(
-        InlineKeyboardButton(text="👥 Войти в группу", callback_data=GeneralAction(action="get_invite_link").pack())
-    )
+    if not is_member:
+        builder.row(
+            InlineKeyboardButton(text="👥 Войти в группу", callback_data=GeneralAction(action="get_invite_link").pack())
+        )
     return builder.as_markup()
 
 def get_onboarding_keyboard() -> InlineKeyboardMarkup:

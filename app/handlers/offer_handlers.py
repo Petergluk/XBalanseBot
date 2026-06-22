@@ -23,7 +23,7 @@ from app.keyboards import (
     get_offer_duration_skip_keyboard,
     get_main_menu_keyboard
 )
-from app.utils import ensure_user_exists, get_user_balance, format_amount, add_message_ids_to_state
+from app.utils import ensure_user_exists, get_user_balance, format_amount, add_message_ids_to_state, check_is_group_member
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -55,7 +55,8 @@ async def cancel_offer_creation(event: Message | CallbackQuery, state: FSMContex
     user_id = event.from_user.id
     balance = await get_user_balance(user_id)
     text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
-    keyboard = get_main_menu_keyboard()
+    is_member = await check_is_group_member(bot, user_id)
+    keyboard = get_main_menu_keyboard(is_member=is_member)
     
     if isinstance(event, Message):
         await event.answer(text, reply_markup=keyboard, parse_mode="HTML")

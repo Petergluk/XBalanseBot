@@ -36,7 +36,7 @@ from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
                        get_user_balance, is_admin, validate_amount,
-                       add_message_id_to_state)
+                       add_message_id_to_state, check_is_group_member)
 from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
@@ -90,7 +90,10 @@ async def show_main_menu(message: Message | CallbackQuery):
     user_id = message.from_user.id
     balance = await get_user_balance(user_id)
     text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
-    keyboard = get_main_menu_keyboard()
+    
+    bot = message.bot
+    is_member = await check_is_group_member(bot, user_id)
+    keyboard = get_main_menu_keyboard(is_member=is_member)
     
     if isinstance(message, Message):
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

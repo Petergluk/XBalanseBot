@@ -246,3 +246,12 @@ def add_message_ids_to_state(data: dict, *msg_ids: int) -> list:
 
 def add_message_id_to_state(data: dict, msg_id: int) -> list:
     return add_message_ids_to_state(data, msg_id)
+
+async def check_is_group_member(bot: Bot, user_id: int) -> bool:
+    """Проверяет, является ли пользователь участником основной группы."""
+    try:
+        member = await bot.get_chat_member(chat_id=MAIN_GROUP_ID, user_id=user_id)
+        return member.status in ('member', 'administrator', 'creator', 'restricted')
+    except Exception as e:
+        logger.debug(f"Failed to check group membership: {e}")
+        return False

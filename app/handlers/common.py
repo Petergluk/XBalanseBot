@@ -29,7 +29,7 @@ from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
 from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers.user_commands import show_main_menu
-from app.utils import ensure_user_exists, format_amount, is_admin
+from app.utils import ensure_user_exists, format_amount, is_admin, check_is_group_member
 from app.callbacks import GeneralAction
 
 router = Router()
@@ -153,13 +153,7 @@ async def send_invite_link(target: Message | CallbackQuery):
     reply_markup = get_back_to_menu_keyboard()
     
     # 1. Проверяем, не состоит ли пользователь уже в группе
-    is_member = False
-    try:
-        member = await bot.get_chat_member(chat_id=MAIN_GROUP_ID, user_id=user_id)
-        if member.status in ('member', 'administrator', 'creator', 'restricted'):
-            is_member = True
-    except Exception as e:
-        logger.debug(f"Failed to check chat member status: {e}")
+    is_member = await check_is_group_member(bot, user_id)
 
     if is_member:
         text = "Вы уже являетесь участником группы! 🎉"

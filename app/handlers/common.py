@@ -240,15 +240,14 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
 
     logger.info(f"User {new_member.full_name} ({new_member.id}) joined the main group")
     
-    is_new_user = await ensure_user_exists(new_member.id, new_member.username, new_member.is_bot)
+    await ensure_user_exists(new_member.id, new_member.username, new_member.is_bot)
     
-    if is_new_user:
-        await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")
-        bonus_amount = await db.get_setting('welcome_bonus_amount', '1500')
+    credited = await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")
+    if credited > 0:
         bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
         
         bonus_text = bonus_text_template.format(
-            amount=bonus_amount,
+            amount=format_amount(credited),
             currency_symbol=CURRENCY_SYMBOL,
             username=new_member.full_name or new_member.first_name
         )

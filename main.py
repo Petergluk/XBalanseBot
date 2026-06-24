@@ -255,9 +255,13 @@ async def main():
         await setup_scheduler(bot, scheduler)
         await bot.delete_webhook(drop_pending_updates=True)
 
+        # Resolve all update types that the bot handles (includes chat_member)
+        allowed_updates = dp.resolve_used_update_types()
+        logger.info(f"Resolved allowed updates: {allowed_updates}")
+
         if DEV_MODE:
             logger.info("Bot is running in DEVELOPMENT mode (polling).")
-            await dp.start_polling(bot)
+            await dp.start_polling(bot, allowed_updates=allowed_updates)
         else:
             WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
             if not WEBHOOK_HOST:
@@ -267,9 +271,9 @@ async def main():
             logger.info("Bot is running in PRODUCTION mode (webhook).")
             webhook_url = f"https://{WEBHOOK_HOST}/webhook/telegram"
             if WEBHOOK_SECRET_TOKEN:
-                await bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET_TOKEN)
+                await bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET_TOKEN, allowed_updates=allowed_updates)
             else:
-                await bot.set_webhook(webhook_url)
+                await bot.set_webhook(webhook_url, allowed_updates=allowed_updates)
             logger.info(f"Webhook set to: {webhook_url}")
             await run_webhook_server(bot, dp)
 

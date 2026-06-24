@@ -119,6 +119,63 @@ async def cmd_gide(message: Message):
 async def cmd_test(message: Message):
     await message.answer(LEXICON_RU["test_commands"], parse_mode="HTML")
 
+@router.message(Command("reset", ignore_case=True))
+async def cmd_reset(message: Message):
+    """Полное удаление пользователя из базы данных для тестирования с нуля."""
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply(
+            "❌ Укажите username или Telegram ID пользователя:\n"
+            "<code>/reset @username</code> или <code>/reset 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+    
+    target_arg = args[1]
+    user = None
+    if target_arg.isdigit():
+        user = await db.get_user(telegram_id=int(target_arg))
+    else:
+        username = target_arg.lstrip('@').lower()
+        user = await db.get_user(username=username)
+        
+    if not user:
+        await message.reply(f"❌ Пользователь <b>{target_arg}</b> не найден в базе данных.", parse_mode="HTML")
+        return
+
+    user_id = user['id']
+    telegram_id = user['telegram_id']
+    username_str = f"@{user['username']}" if user['username'] else f"ID {telegram_id}"
+    
+    async with db.pool.connection() as conn:
+        async with conn.transaction():
+            # 1. Удаляем транзакции пользователя
+            await conn.execute(
+                "DELETE FROM transactions WHERE from_user_id = %s OR to_user_id = %s",
+                (user_id, user_id)
+            )
+            
+            # 2. Удаляем логи наград по хэштегам
+            await conn.execute(
+                "DELETE FROM tag_rewards_log WHERE user_telegram_id = %s",
+                (telegram_id,)
+            )
+            
+            # 3. Удаляем самого пользователя (зависимые записи в подписках, оверайдах и офферах удалятся каскадно)
+            await conn.execute(
+                "DELETE FROM users WHERE id = %s",
+                (user_id,)
+            )
+            
+    await message.reply(
+        f"🧹 Пользователь {username_str} полностью удален из базы данных!\n"
+        f"- Удалены все транзакции с его участием.\n"
+        f"- Очищена история наград по хэштегам.\n"
+        f"- Каскадно удалены все его подписки на активности, офферы и оверайды.\n\n"
+        f"Система полностью забыла этого пользователя. Теперь вы можете протестировать весь процесс с самого начала (отправка команды /start, онбординг, получение ссылки и вступление в группу).",
+        parse_mode="HTML"
+    )
+
 @router.message(Command("users", ignore_case=True))
 async def cmd_users(message: Message):
     # Loading stub for /users

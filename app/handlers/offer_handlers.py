@@ -175,7 +175,7 @@ async def process_offer_price(message: Message, state: FSMContext, bot: Bot):
         await save_message_ids(state, message.message_id, prompt.message_id)
         return
         
-    await state.update_data(price=float(price))
+    await state.update_data(price=str(price))
     
     # Запрашиваем количество
     prompt = await message.answer(
@@ -579,7 +579,7 @@ async def process_offer_buy(callback: CallbackQuery, callback_data: OfferAction,
             await bot.send_message(
                 chat_id=seller['telegram_id'],
                 text=LEXICON_RU["msg_offer_purchase_success_seller"].format(
-                    title=offer['title'],
+                    title=html.escape(offer['title']),
                     buyer_username=buyer_username,
                     price=price,
                     currency_symbol=CURRENCY_SYMBOL
@@ -593,7 +593,7 @@ async def process_offer_buy(callback: CallbackQuery, callback_data: OfferAction,
         # Покупателю
         try:
             buyer_msg = LEXICON_RU["msg_offer_purchase_success_buyer"].format(
-                title=offer['title'],
+                title=html.escape(offer['title']),
                 seller_username=seller_username,
                 price=price,
                 currency_symbol=CURRENCY_SYMBOL

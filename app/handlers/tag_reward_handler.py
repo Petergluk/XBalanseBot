@@ -17,10 +17,10 @@ from aiogram.types import Message, ReactionTypeEmoji
 from aiogram.exceptions import TelegramBadRequest
 
 from redis.asyncio import Redis
-from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID, REDIS_URL
+from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID, REDIS_URL, REDIS_HOST
 from app.database import db
 from app.lexicon import LEXICON_RU
-from app.utils import format_amount
+from app.utils import format_amount, safe_format_template
 import json
 
 router = Router()
@@ -28,11 +28,21 @@ logger = logging.getLogger(__name__)
 
 _redis_client = None
 
+TAG_RULES_CACHE_KEY = "xblns:tag_rules_cache"
+
 def get_redis_client() -> Redis:
     global _redis_client
     if _redis_client is None:
-        _redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+        effective_url = REDIS_URL or f"redis://{REDIS_HOST}:6379/0"
+        _redis_client = Redis.from_url(effective_url, decode_responses=True)
     return _redis_client
+
+async def invalidate_tag_rules_cache() -> None:
+    try:
+        redis = get_redis_client()
+        await redis.delete(TAG_RULES_CACHE_KEY)
+    except Exception as e:
+        logger.warning(f"Failed to invalidate tag rules cache: {e}")
 
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -132,7 +142,7 @@ async def _process_message(message: Message):
     if matched_rule.get('group_msg'):
         try:
             await message.reply(
-                matched_rule['group_msg'].format(
+                safe_format_template(matched_rule['group_msg'], 
                     mention=message.from_user.mention_html(),
                     amount=format_amount(reward),
                     currency_symbol=CURRENCY_SYMBOL,
@@ -155,7 +165,7 @@ async def _process_message(message: Message):
             balance=format_amount(Decimal(str(balance)))
         )
     else:
-        bot_msg = bot_msg.format(
+        bot_msg = safe_format_template(bot_msg, 
             mention=message.from_user.mention_html(),
             amount=format_amount(reward),
             currency_symbol=CURRENCY_SYMBOL,

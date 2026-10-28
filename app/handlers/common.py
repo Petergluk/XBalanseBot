@@ -1,3 +1,4 @@
+import html
 # XBalanseBot/app/handlers/common.py
 # FULL FILE EMITTED: YES
 # v1.5.6
@@ -246,10 +247,11 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
     if credited > 0:
         bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
         
-        bonus_text = bonus_text_template.format(
+        bonus_text = safe_format_template(
+            bonus_text_template,
             amount=format_amount(credited),
             currency_symbol=CURRENCY_SYMBOL,
-            username=new_member.full_name or new_member.first_name
+            username=html.escape(new_member.full_name or new_member.first_name or "Участник")
         )
         
         try:
@@ -267,7 +269,7 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
     if await db.get_setting('welcome_group_enabled', '0') == '1':
         welcome_text_template = await db.get_setting('welcome_message_group', LEXICON_RU["default_welcome_group"])
         bot_info = await bot.get_me()
-        welcome_text = welcome_text_template.format(username=new_member.mention_html(), bot_username=bot_info.username)
+        welcome_text = safe_format_template(welcome_text_template, username=new_member.mention_html(), bot_username=bot_info.username)
         await bot.send_message(event.chat.id, welcome_text, parse_mode="HTML")
     else:
         logger.info(f"Processed join for user {new_member.id} silently (group welcome disabled).")

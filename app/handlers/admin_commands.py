@@ -63,7 +63,7 @@ async def admin_callback_middleware(handler, event: CallbackQuery, data):
 async def _parse_user_amount_comment(message: Message) -> tuple | None:
     args = message.text.split()
     if len(args) < 3:
-        await message.reply(LEXICON_RU["err_admin_format"].format(command=args[0]))
+        await message.reply(LEXICON_RU["err_admin_format"].format(command=args[0]), parse_mode="HTML")
         return None
     username = args[1].lstrip('@').lower()
     try:
@@ -233,7 +233,7 @@ async def cmd_check(message: Message):
     if transactions:
         history_text = format_transactions_history(transactions, user['id'])
     response = LEXICON_RU["msg_admin_check_user"].format(
-        username=user['username'],
+        username=escape(user['username'] or ''),
         telegram_id=user['telegram_id'],
         balance=format_amount(user['balance']),
         currency_symbol=CURRENCY_SYMBOL,
@@ -257,6 +257,45 @@ async def cmd_rem(message: Message, bot: Bot):
     if not parsed: return
     user, amount, comment = parsed
     await _change_balance(bot, message.from_user, user, -amount, comment, 'manual_rem')
+
+@router.message(Command("pay_from_fund", "fund", "fund_pay", ignore_case=True))
+async def cmd_fund_pay(message: Message, bot: Bot):
+    """Перевод средств участнику напрямую из Фонда сообщества (id = 0)."""
+    parsed = await _parse_user_amount_comment(message)
+    if not parsed:
+        return
+    user, amount, comment = parsed
+    if user['id'] == 0:
+        await message.reply("❌ Нельзя перевести средства из Фонда самому Фонду.")
+        return
+
+    res = await db.transfer_from_fund(user['id'], amount, comment)
+    if not res['success']:
+        await message.reply(
+            f"❌ В Фонде недостаточно средств для перевода.\n"
+            f"Доступно в Фонде: <b>{format_amount(res['fund_balance'])} {CURRENCY_SYMBOL}</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    logger.info(
+        f"Admin {message.from_user.id} transferred {amount} from Fund to user {user['telegram_id']} (@{user['username']}). Comment: {comment}"
+    )
+    await message.reply(
+        f"✅ Из Фонда переведено <b>{format_amount(amount)} {CURRENCY_SYMBOL}</b> пользователю @{escape(user['username'] or str(user['telegram_id']))}.\n"
+        f"🏛 Остаток в Фонде: <b>{format_amount(res['new_fund_balance'])} {CURRENCY_SYMBOL}</b>",
+        parse_mode="HTML"
+    )
+    try:
+        await bot.send_message(
+            user['telegram_id'],
+            f"🏛 Вам поступил перевод из <b>Фонда сообщества</b>!\n\n"
+            f"<b>Сумма:</b> {format_amount(amount)} {CURRENCY_SYMBOL}\n"
+            f"<b>Комментарий:</b> {escape(comment or '')}",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.warning(f"Could not send fund payment notification to user {user['telegram_id']}: {e}")
 
 async def _toggle_admin(message: Message, make_admin: bool):
     args = message.text.split()
@@ -645,6 +684,8 @@ async def process_del_tag_rule(callback: CallbackQuery):
         return
         
     await db.delete_tag_rule(rule_id)
+    from app.handlers.tag_reward_handler import invalidate_tag_rules_cache
+    await invalidate_tag_rules_cache()
     logger.info(f"Admin {callback.from_user.id} deleted tag rule {rule_id} (#{rule['hashtag']})")
     await callback.answer(LEXICON_RU["msg_tag_rule_deleted"].format(rule_id=rule_id))
     
@@ -837,6 +878,8 @@ async def _finish_tag_rule(message, state: FSMContext, reaction: str):
         bot_msg=data.get('bot_msg'),
         reaction=reaction
     )
+    from app.handlers.tag_reward_handler import invalidate_tag_rules_cache
+    await invalidate_tag_rules_cache()
     logger.info(f"Tag rule #{rule_id} created: #{data['hashtag']} -> {data['reward']}")
     await message.answer(
         LEXICON_RU["msg_tag_rule_created"].format(

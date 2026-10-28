@@ -306,7 +306,7 @@ async def get_events_keyboard(events: list) -> InlineKeyboardMarkup:
         
         if not next_run: continue # Пропускаем события без будущих запусков
 
-        date_str = next_run.strftime('%-d.%m')  # без ведущего нуля
+        date_str = f"{next_run.day}.{next_run.strftime('%m')}"  # без ведущего нуля
         weekday_name = weekdays_map[next_run.weekday()]
         time_str = next_run.strftime('%H:%M')
        

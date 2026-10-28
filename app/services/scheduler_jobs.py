@@ -158,6 +158,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
         return
         
     fund_user_id = SYSTEM_FUND_USER_ID
+    notifications_to_send = []
     
     async with db.pool.connection() as conn:
         async with conn.transaction():
@@ -174,7 +175,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                 grace_credit_used = db_user['grace_credit_used']
                 
                 if balance >= fee:
-                    # Обычная оплата
+                    # Обычная оплата (быстро внутри БД-транзакции)
                     await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
                     await conn.execute(
                         "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
@@ -188,13 +189,9 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                         f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
                         f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие."
                     )
-                    try:
-                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML")
-                    except Exception as e:
-                        logger.warning(f"Failed to send payment notification to user {user['telegram_id']}: {e}")
+                    notifications_to_send.append((user['telegram_id'], notification_text, None))
                         
                 elif not grace_credit_used:
-                    # Отложенный платеж: предлагаем взять кредит
                     from app.callbacks import GraceCreditAction
                     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                     
@@ -211,23 +208,23 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                         f"❌ Недостаточно средств для участия (стоимость: <b>{format_amount(fee)} {CURRENCY_SYMBOL}</b>, ваш баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>).\n\n"
                         f"Вы можете воспользоваться разовым кредитом доверия из фонда, чтобы подтвердить участие и получить ссылку на событие."
                     )
-                    try:
-                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML", reply_markup=keyboard)
-                    except Exception as e:
-                        logger.warning(f"Failed to send grace credit offer to user {user['telegram_id']}: {e}")
+                    notifications_to_send.append((user['telegram_id'], notification_text, keyboard))
                         
                 else:
-                    # Кредит уже использован, участие приостановлено, не присылаем ссылку
                     notification_text = (
                         f"⚠️ <b>Предстоящее событие: «{escaped_event_name}»</b>\n\n"
                         f"❌ <b>Участие приостановлено.</b>\n"
                         f"Недостаточно средств для участия (стоимость: {format_amount(fee)} {CURRENCY_SYMBOL}), а лимит кредита доверия уже исчерпан.\n"
                         f"Пожалуйста, пополните ваш баланс для возобновления участия."
                     )
-                    try:
-                        await bot.send_message(user['telegram_id'], notification_text, parse_mode="HTML")
-                    except Exception as e:
-                        logger.warning(f"Failed to send payment failure notification to user {user['telegram_id']}: {e}")
+                    notifications_to_send.append((user['telegram_id'], notification_text, None))
+
+    # Отправляем сетевые уведомления в Telegram ПОСЛЕ коммита БД-транзакции и снятия блокировок
+    for tg_id, text_msg, reply_kb in notifications_to_send:
+        try:
+            await bot.send_message(tg_id, text_msg, parse_mode="HTML", reply_markup=reply_kb)
+        except Exception as e:
+            logger.warning(f"Failed to send event payment notification to user {tg_id}: {e}")
     
     logger.info(f"Successfully processed payments for event {event['id']}.")
 

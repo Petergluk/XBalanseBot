@@ -710,3 +710,30 @@ class TestGraceCreditCallback:
         # Кнопки должны быть удалены
         cb.message.edit_reply_markup.assert_called_once_with(reply_markup=None)
         cb.answer.assert_called_once_with("❌ Вы уже использовали свой кредит доверия. Пожалуйста, пополните баланс.", show_alert=True)
+
+
+from app.handlers.tag_reward_handler import _extract_hashtags
+
+
+def test_extract_hashtags_cyrillic_and_case_insensitive():
+    """Проверяет извлечение кириллических и латинских хэштегов в нижнем регистре."""
+    tags = _extract_hashtags("Мой пост #ОтчетДня и #Python_3 в клубе!")
+    assert "отчетдня" in tags
+    assert "python_3" in tags
+
+
+
+@pytest.mark.asyncio
+async def test_tribute_webhook_secret_validation(monkeypatch):
+    """Проверяет отклонение вебхука Tribute при неверном X-Tribute-Secret (403)."""
+    from unittest.mock import MagicMock
+    from app.services import webhook_handler
+
+    monkeypatch.setattr(webhook_handler, "TRIBUTE_WEBHOOK_SECRET", "top-secret-token")
+
+    fake_req = MagicMock()
+    fake_req.app = {"bot": MagicMock()}
+    fake_req.headers = {"X-Tribute-Secret": "wrong-token"}
+
+    resp = await webhook_handler.handle_tribute_webhook(fake_req)
+    assert resp.status == 403

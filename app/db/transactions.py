@@ -25,7 +25,13 @@ class TransactionRepository(BaseRepository):
             async with conn.transaction():
                 from_user_id = 0 if transaction_type == 'manual_add' else target_user_id
                 to_user_id = target_user_id if transaction_type == 'manual_add' else 0
-                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, target_user_id))
+                await conn.execute(
+                    """UPDATE users
+                       SET balance = balance + %s,
+                           grace_credit_used = CASE WHEN balance + %s >= 0 THEN FALSE ELSE grace_credit_used END
+                       WHERE id = %s""",
+                    (amount, amount, target_user_id)
+                )
                 await conn.execute(
                     "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
                     (from_user_id, to_user_id, abs(amount), transaction_type, comment)
@@ -71,6 +77,48 @@ class TransactionRepository(BaseRepository):
                 await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (sender_db_id,))
                 await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (recipient_user_id,))
                 return {'success': True, 'sender_db_id': sender_db_id}
+
+    async def transfer_from_fund(self, recipient_user_id: int, amount, comment: str) -> dict:
+        """
+        Атомарный перевод средств из Фонда (id = 0) пользователю.
+        Проверяет достаточность средств в Фонде и сбрасывает grace_credit_used при выходе из минуса.
+        """
+        from decimal import Decimal
+        amount = Decimal(str(amount))
+        async with self.pool.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT id FROM users WHERE id IN (0, %s) ORDER BY id FOR UPDATE",
+                    (recipient_user_id,)
+                )
+                cur = await conn.execute("SELECT balance FROM users WHERE id = 0")
+                fund_row = await cur.fetchone()
+                fund_balance = Decimal(str(fund_row[0])) if fund_row else Decimal('0')
+
+                if fund_balance < amount:
+                    return {
+                        'success': False,
+                        'error': 'insufficient_fund_balance',
+                        'fund_balance': fund_balance,
+                    }
+
+                await conn.execute("UPDATE users SET balance = balance - %s WHERE id = 0", (amount,))
+                await conn.execute(
+                    """UPDATE users
+                       SET balance = balance + %s,
+                           transaction_count = transaction_count + 1,
+                           grace_credit_used = CASE WHEN balance + %s >= 0 THEN FALSE ELSE grace_credit_used END
+                       WHERE id = %s""",
+                    (amount, amount, recipient_user_id)
+                )
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'fund_payment', %s)",
+                    (recipient_user_id, amount, comment)
+                )
+                return {
+                    'success': True,
+                    'new_fund_balance': fund_balance - amount,
+                }
 
     async def get_transaction_history(self, telegram_id: int, date_limit: datetime) -> Tuple[Optional[int], list]:
         """Возвращает (user_db_id, transactions_list) для истории."""

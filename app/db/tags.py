@@ -145,8 +145,12 @@ class TagRewardRepository(BaseRepository):
                     return False
 
                 await conn.execute(
-                    "UPDATE users SET balance = balance + %s, transaction_count = transaction_count + 1 WHERE telegram_id = %s",
-                    (reward, user_telegram_id),
+                    """UPDATE users
+                       SET balance = balance + %s,
+                           transaction_count = transaction_count + 1,
+                           grace_credit_used = CASE WHEN balance + %s >= 0 THEN FALSE ELSE grace_credit_used END
+                       WHERE telegram_id = %s""",
+                    (reward, reward, user_telegram_id),
                 )
                 await conn.execute(
                     "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'tag_reward', %s)",

@@ -100,7 +100,7 @@ class TestChangeBalance:
         async with db.pool.connection() as conn:
             await conn.execute("UPDATE users SET balance = 1000 WHERE id = %s", (user['id'],))
         
-        await db.change_balance(user['id'], Decimal("-300"), 'manual_remove', 'штраф')
+        await db.change_balance(user['id'], Decimal("-300"), 'manual_rem', 'штраф')
         updated = await db.get_user(telegram_id=2002)
         assert updated['balance'] == Decimal("700")
 
@@ -187,3 +187,33 @@ class TestTransactionHistory:
         user_id, txs = await db.get_transaction_history(99999, now - timedelta(days=30))
         assert user_id is None
         assert txs == []
+
+
+
+@pytest.mark.asyncio
+async def test_transfer_from_fund_and_debt_reset(db):
+    """Проверяет перевод из Фонда (id=0), проверку остатка Фонда и авто-сброс grace_credit_used."""
+    await db.create_user(telegram_id=777001, username="volunteer")
+    user = await db.get_user(telegram_id=777001)
+
+    # Загоняем пользователя в минус с активным флагом grace_credit_used
+    async with db.pool.connection() as conn:
+        await conn.execute(
+            "UPDATE users SET balance = -50, grace_credit_used = TRUE WHERE id = %s",
+            (user["id"],),
+        )
+        await conn.execute("UPDATE users SET balance = 100 WHERE id = 0")
+
+    # Попытка перевести больше, чем есть в Фонде
+    fail_res = await db.transfer_from_fund(user["id"], Decimal("250"), "Слишком много")
+    assert fail_res["success"] is False
+    assert fail_res["error"] == "insufficient_fund_balance"
+
+    # Успешный перевод 80 орфов из Фонда (выводит пользователя из -50 в +30)
+    ok_res = await db.transfer_from_fund(user["id"], Decimal("80"), "За помощь клубу")
+    assert ok_res["success"] is True
+    assert ok_res["new_fund_balance"] == Decimal("20")
+
+    updated_user = await db.get_user(telegram_id=777001)
+    assert updated_user["balance"] == Decimal("30")
+    assert updated_user["grace_credit_used"] is False

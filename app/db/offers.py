@@ -141,7 +141,13 @@ class OfferRepository(BaseRepository):
                 
                 # 6. Обновляем балансы
                 await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (price, buyer['id']))
-                await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (price, seller['id']))
+                await conn.execute(
+                    """UPDATE users
+                       SET balance = balance + %s,
+                           grace_credit_used = CASE WHEN balance + %s >= 0 THEN FALSE ELSE grace_credit_used END
+                       WHERE id = %s""",
+                    (price, price, seller['id'])
+                )
                 
                 # 7. Записываем транзакцию
                 comment = f"Покупка товара: {offer['title']}"

@@ -98,12 +98,12 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
 
     for tx in transactions:
         if tx['to_user_id'] == user_db_id:
-            if tx['type'] in ('manual_add', 'welcome_bonus', 'top_up'):
+            if tx['type'] in ('manual_add', 'welcome_bonus', 'top_up', 'tag_reward'):
                 top_ups.append(tx)
-            elif tx['type'] in ('transfer', 'fund_payment'):
+            elif tx['type'] in ('transfer', 'fund_payment', 'purchase'):
                 incoming.append(tx)
         elif tx['from_user_id'] == user_db_id:
-            if tx['type'] in ('transfer', 'event_fee'):
+            if tx['type'] in ('transfer', 'event_fee', 'purchase'):
                 outgoing.append(tx)
             elif tx['type'] in ('demurrage', 'manual_rem'):
                 system_debits.append(tx)
@@ -123,15 +123,23 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
             response_parts.append(format_tx_line(tx, "✅ +"))
     
     if incoming:
-        response_parts.append("\n📥 <b>Входящие переводы:</b>\n")
+        response_parts.append("\n📥 <b>Входящие переводы и продажи:</b>\n")
         for tx in incoming:
-            peer = f"@{tx['sender_username']}" if tx['sender_username'] else "Пользователь"
+            if tx['sender_username'] == 'fund' or tx['type'] == 'fund_payment':
+                peer = "Фонда"
+            else:
+                peer = f"@{tx['sender_username']}" if tx['sender_username'] else "Пользователь"
             response_parts.append(format_tx_line(tx, "➕", prefix="от ", peer_name=peer))
 
     if outgoing:
         response_parts.append("\n📤 <b>Исходящие переводы и платежи:</b>\n")
         for tx in outgoing:
-            peer = f"@{tx['recipient_username']}" if tx['recipient_username'] != 'fund' else "Фонд"
+            if tx['type'] == 'event_fee':
+                peer = "Мероприятие"
+            elif tx['recipient_username'] == 'fund':
+                peer = "Фонд"
+            else:
+                peer = f"@{tx['recipient_username']}" if tx['recipient_username'] else "Пользователь"
             response_parts.append(format_tx_line(tx, "➖ -", peer_name=peer))
 
     if system_debits:
@@ -255,3 +263,13 @@ async def check_is_group_member(bot: Bot, user_id: int) -> bool:
     except Exception as e:
         logger.debug(f"Failed to check group membership: {e}")
         return False
+
+
+def safe_format_template(template_str: str, **kwargs) -> str:
+    """Безопасная подстановка плейсхолдеров без риска KeyError/ValueError на пользовательском вводе."""
+    if not template_str:
+        return ""
+    result = template_str
+    for key, val in kwargs.items():
+        result = result.replace(f"{{{key}}}", str(val))
+    return result

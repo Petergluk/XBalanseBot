@@ -1,21 +1,16 @@
 # Stage 1: Build
 FROM python:3.13.4-slim AS builder
 
-# Исключаем создание __pycache__ и .pyc файлов
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Устанавливаем poetry
 RUN pip install poetry==2.1.3
 
-# Копируем файлы зависимостей
-COPY pyproject.toml ./
+COPY pyproject.toml poetry.lock* ./
 
-# Создаем виртуальное окружение и устанавливаем зависимости без lock проверки
 RUN poetry config virtualenvs.in-project true && \
-    poetry lock && \
     poetry install --only main --no-root --no-interaction --no-ansi
 
 # Stage 2: Runtime
@@ -26,14 +21,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Копируем только виртуальное окружение из предыдущего билда
+RUN useradd -m -u 1000 appuser
+
 COPY --from=builder /app/.venv /app/.venv
+COPY --chown=appuser:appuser . .
 
-# Копируем исходный код
-COPY . .
-
-# Добавляем .venv/bin в PATH
 ENV PATH="/app/.venv/bin:$PATH"
+USER appuser
 
-# При запуске применяем миграции и стартуем бота
 CMD ["sh", "-c", "alembic upgrade head && python main.py"]

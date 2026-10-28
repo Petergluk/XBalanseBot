@@ -15,7 +15,7 @@ class UserRepository(BaseRepository):
                 if telegram_id is not None:
                     await cur.execute("SELECT * FROM users WHERE telegram_id = %s", (telegram_id,))
                 elif username:
-                    await cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+                    await cur.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(%s)", (username.lstrip('@'),))
                 else:
                     return None
                 return await cur.fetchone()

@@ -26,6 +26,8 @@ RUN useradd -m -u 1000 appuser
 COPY --from=builder /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 
+RUN mkdir -p /app/data/logs && chown -R appuser:appuser /app
+
 ENV PATH="/app/.venv/bin:$PATH"
 USER appuser
 

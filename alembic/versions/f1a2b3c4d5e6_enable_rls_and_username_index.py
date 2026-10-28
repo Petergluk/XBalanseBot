@@ -1,14 +1,14 @@
 """Enable Row Level Security (RLS) on all public tables for Supabase and add username index
 
 Revision ID: f1a2b3c4d5e6
-Revises: e694a49f88ea
+Revises: a4541b05fb21
 Create Date: 2026-10-27 12:15:00.000000
 """
 from typing import Sequence, Union
 from alembic import op
 
 revision: str = 'f1a2b3c4d5e6'
-down_revision: Union[str, Sequence[str], None] = 'e694a49f88ea'
+down_revision: Union[str, Sequence[str], None] = 'a4541b05fb21'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

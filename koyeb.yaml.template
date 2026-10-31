@@ -17,6 +17,8 @@ services:
       - was  # Washington D.C. (change to: fra, sin, tyo, par, sfo)
     instance_types:
       - type: free  # or: eco-nano, nano, micro, etc.
+    # IMPORTANT: With min: 0 (free tier Scale-to-Zero), configure UptimeRobot to ping GET / every 5 min
+    # so APScheduler background jobs (daily demurrage & event reminders) stay active, or set min: 1.
     scalings:
       - min: 0
         max: 1

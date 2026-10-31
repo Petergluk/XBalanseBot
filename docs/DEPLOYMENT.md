@@ -195,6 +195,29 @@ docker-compose logs -f bot
 
 ---
 
+## Продакшен-связка: Koyeb + Supabase + Upstash (Рекомендуемая)
+
+Текущий продакшен-стек бота работает на связке **Koyeb (Compute) + Supabase (PostgreSQL) + Upstash (Redis)**. При настройке обязательно учитывайте следующие особенности:
+
+### 1. Supabase PostgreSQL (`DATABASE_URL` и RLS)
+* **Connection Pooler**: Используйте строку подключения **Session Pooler** (порт `5432`) из панели Supabase (`Connect -> Connection String -> URI -> Session Pooler`). Поскольку бот использует собственный пул `psycopg_pool` и при старте контейнера запускает `alembic upgrade head`, Session Pooler гарантирует полную совместимость с prepared statements и миграциями Alembic.
+* **Row-Level Security (RLS)**: Миграция `f1a2b3c4d5e6_enable_rls_and_username_index.py` автоматически включает `ENABLE ROW LEVEL SECURITY` на всех таблицах в схеме `public` и отзывает права у публичных ролей `anon` и `authenticated`. Это закрывает таблицы от внешнего доступа через Supabase PostgREST API (`rls_disabled_in_public`), в то время как сам бот подключается под ролью `postgres` и работает без ограничений.
+
+### 2. Upstash Redis (`REDIS_URL` с TLS)
+* Для подключения к Upstash обязательно используйте протокол **`rediss://`** (с двумя `s` — TLS-шифрование):
+  ```env
+  REDIS_URL=rediss://default:<YOUR_UPSTASH_PASSWORD>@<YOUR_ENDPOINT>.upstash.io:6379
+  ```
+* Бот автоматически передает `REDIS_URL` как в `RedisStorage` (для хранения шагов диалогов FSM), так и в клиент кэширования правил хэштегов (`tag_rules:active`).
+
+### 3. Koyeb Scaling и работа планировщика `APScheduler`
+* **Внимание (Scale-to-Zero)**: На бесплатном тарифе Koyeb при настройке `min: 0` контейнер «засыпает» при отсутствии входящих HTTP-запросов. Когда контейнер спит, внутренний планировщик `APScheduler` (ежедневный демерредж в `00:01 MSK`, списание платы за события и отправка напоминаний) **не выполняется**.
+* **Решение**:
+  1. На тарифах `eco-nano` и выше установите `scalings: min: 1, max: 1` (постоянно активный инстанс).
+  2. На тарифе `free` (`min: 0`) настройте бесплатный внешний монитор (например, **UptimeRobot** или **cron-job.org**) на отправку `GET https://<your-app>.koyeb.app/` каждые **5 минут**. Эндпоинт `/` возвращает `200 OK ("I'm awake!")` и удерживает контейнер и `APScheduler` в активном состоянии 24/7.
+
+---
+
 ## Деплой на Koyeb
 
 ### 1. Подготовка

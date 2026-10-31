@@ -89,7 +89,7 @@ async def _change_balance(
         action_word = "Начислено" if amount > 0 else "Списано"
         preposition = "на" if amount > 0 else "с"
         logger.info(f"Admin {admin_user.id} performed '{transaction_type}' for user {target_user['telegram_id']} ({target_user['username']}). Amount: {amount}, Comment: {comment}")
-        await bot.send_message(admin_user.id, LEXICON_RU["msg_admin_balance_changed"].format(action_word=action_word, amount=format_amount(abs(amount)), currency_symbol=CURRENCY_SYMBOL, preposition=preposition, username=target_user['username']))
+        await bot.send_message(admin_user.id, LEXICON_RU["msg_admin_balance_changed"].format(action_word=action_word, amount=format_amount(abs(amount)), currency_symbol=CURRENCY_SYMBOL, preposition=preposition, username=escape(target_user['username'] or str(target_user['telegram_id']))), parse_mode="HTML")
         try:
             await bot.send_message(
                 target_user['telegram_id'],
@@ -99,7 +99,8 @@ async def _change_balance(
                     amount=format_amount(abs(amount)),
                     currency_symbol=CURRENCY_SYMBOL,
                     comment=escape(comment or "")
-                )
+                ),
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.warning(f"Could not send notification to user {target_user['telegram_id']}: {e}")
@@ -242,7 +243,7 @@ async def cmd_check(message: Message):
         transaction_count=user['transaction_count'],
         history_text=history_text
     )
-    await message.answer(response)
+    await message.answer(response, parse_mode="HTML")
 
 @router.message(Command("add", ignore_case=True))
 async def cmd_add(message: Message, bot: Bot):
@@ -328,7 +329,7 @@ async def cmd_remove_admin(message: Message):
 @router.message(Command("settings", ignore_case=True))
 async def cmd_settings(message: Message):
     keyboard = await get_settings_keyboard()
-    await message.answer(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard)
+    await message.answer(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(SettingsAction.filter())
 async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext, callback_data: SettingsAction):
@@ -343,7 +344,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         "edit_welcome_bot": (LEXICON_RU["msg_admin_prompt_edit_welcome_bot"], 'welcome_message_bot', LEXICON_RU["default_welcome_bot"], AdminEditStates.waiting_for_welcome_text),
         "edit_welcome_group": (LEXICON_RU["msg_admin_prompt_edit_welcome_group"], 'welcome_message_group', LEXICON_RU["default_welcome_group"], AdminEditStates.waiting_for_welcome_text_group),
         "edit_reminder": (LEXICON_RU["msg_admin_prompt_edit_reminder"], 'default_reminder_text', LEXICON_RU["default_reminder"], AdminEditStates.waiting_for_reminder_text),
-        "edit_activities_desc": (LEXICON_RU["msg_admin_prompt_edit_activities_desc"], 'activities_description', LEXICON_RU["msg_admin_default_activities_desc"], AdminEditStates.waiting_for_activities_description),
+        "edit_activities_desc": (LEXICON_RU["msg_admin_prompt_edit_activities_desc"], 'activities_description', LEXICON_RU["msg_activities_default_desc"], AdminEditStates.waiting_for_activities_description),
         "edit_bonus_message": (LEXICON_RU["msg_admin_prompt_edit_bonus_message"], 'welcome_bonus_message', LEXICON_RU["default_welcome_bonus"], AdminEditStates.waiting_for_welcome_bonus_text)
     }
     
@@ -419,7 +420,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
             await callback.answer(LEXICON_RU["msg_admin_setting_reset_success"], show_alert=True)
             await state.clear()
             keyboard = await get_settings_keyboard()
-            await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard)
+            await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
         else:
             await callback.answer("Ошибка: Настройка не найдена.")
 
@@ -461,7 +462,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
     elif action == "back_to_settings":
         await state.clear()
         keyboard = await get_settings_keyboard()
-        await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard)
+        await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
 
 async def _update_setting_and_finish(message: Message, state: FSMContext, key: str, value_transformer=str, validator=None):

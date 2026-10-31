@@ -73,7 +73,27 @@ async def cancel_offer_creation(event: Message | CallbackQuery, state: FSMContex
 async def cmd_cancel_offer_creation(message: Message, state: FSMContext, bot: Bot):
     await cancel_offer_creation(message, state, bot)
 
-# --- Начало создания объявления ---
+# --- Начало создания объявления (команда /offer и инлайн-кнопка) ---
+@router.message(Command("offer", "create_offer", ignore_case=True))
+async def cmd_offer_creation(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    user = await db.get_user(telegram_id=user_id)
+    if not user:
+        await message.reply("❌ Сначала запустите бота командой /start!")
+        return
+
+    await state.clear()
+    prompt = await message.answer(
+        LEXICON_RU["msg_offer_prompt_title"],
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
+        ]])
+    )
+    await state.update_data(message_ids=[message.message_id, prompt.message_id])
+    await state.set_state(OfferCreationStates.waiting_for_title)
+
+
 @router.callback_query(GeneralAction.filter(F.action == "menu_create_offer"))
 async def start_offer_creation(callback: CallbackQuery, state: FSMContext, bot: Bot):
     user_id = callback.from_user.id
@@ -459,7 +479,8 @@ async def process_offer_publish(callback: CallbackQuery, callback_data: OfferAct
         return
         
     # 5. Сообщаем об успехе
-    await callback.message.answer(LEXICON_RU["msg_offer_created_success"])
+    from app.keyboards import get_back_to_menu_keyboard
+    await callback.message.answer(LEXICON_RU["msg_offer_created_success"], reply_markup=get_back_to_menu_keyboard())
     await callback.answer()
 
 
@@ -629,3 +650,56 @@ async def process_offer_buy(callback: CallbackQuery, callback_data: OfferAction,
     except Exception as e:
         logger.error(f"Unexpected purchase error: {e}")
         await callback.answer("❌ Произошла непредвиденная ошибка.", show_alert=True)
+
+
+# --- Отмена объявления в группе продавцом или администратором ---
+@router.callback_query(OfferAction.filter(F.action == "cancel"))
+async def process_offer_cancel_in_group(callback: CallbackQuery, callback_data: OfferAction, bot: Bot):
+    offer_id = callback_data.offer_id
+    user_telegram_id = callback.from_user.id
+
+    offer = await db.get_offer(offer_id)
+    if not offer:
+        await callback.answer(LEXICON_RU["err_offer_not_found"], show_alert=True)
+        return
+    if offer['status'] == 'sold':
+        await callback.answer(LEXICON_RU["err_offer_already_sold"], show_alert=True)
+        return
+    if offer['status'] == 'cancelled':
+        await callback.answer(LEXICON_RU["err_offer_already_cancelled"], show_alert=True)
+        return
+
+    cancelled = await db.cancel_offer(offer_id, user_telegram_id)
+    if not cancelled:
+        await callback.answer("❌ Снять объявление может только автор или администратор.", show_alert=True)
+        return
+
+    seller = await db.get_user(user_id=offer['seller_id'])
+    raw_seller_username = seller['username'] if seller and seller.get('username') else f"id{offer['seller_id']}"
+    cancelled_text = LEXICON_RU["msg_offer_card_cancelled"].format(
+        title=escape(offer['title']),
+        seller_username=escape(raw_seller_username),
+        price=offer['price'],
+        currency_symbol=CURRENCY_SYMBOL
+    )
+    try:
+        if offer.get('photo_id'):
+            await bot.edit_message_caption(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+                caption=cancelled_text,
+                parse_mode="HTML",
+                reply_markup=None
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=callback.message.message_id,
+                text=cancelled_text,
+                parse_mode="HTML",
+                reply_markup=None
+            )
+    except Exception as e:
+        logger.error(f"Error updating cancelled offer message: {e}")
+
+    await callback.answer(LEXICON_RU["msg_offer_cancelled_success"], show_alert=True)

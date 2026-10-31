@@ -33,7 +33,8 @@ from app.database import db
 from app.keyboards import (
     get_events_keyboard, get_event_details_keyboard, confirm_delete_keyboard,
     get_activities_keyboard_for_event, get_event_edit_keyboard, get_weekday_keyboard,
-    get_use_default_keyboard, get_event_creation_confirmation_keyboard
+    get_use_default_keyboard, get_event_creation_confirmation_keyboard,
+    get_cancel_dialog_keyboard, get_back_to_menu_keyboard
 )
 from app.states import EventCreationStates, EventEditStates
 from app.utils import is_admin, format_amount, get_next_run_time, format_weekdays
@@ -202,7 +203,8 @@ async def start_event_creation_from_activity(callback: CallbackQuery, state: FSM
 
     await callback.message.edit_text(
         LEXICON_RU["msg_event_ask_name"],
-        parse_mode="Markdown"
+        reply_markup=get_cancel_dialog_keyboard(),
+        parse_mode="HTML"
     )
     await state.update_data(message_ids=message_ids)
     await callback.answer()
@@ -304,8 +306,8 @@ async def proceed_to_cost_from_date(message: Message, state: FSMContext):
     
     sent_message = await message.answer(
         prompt_text,
-        reply_markup=None,
-        parse_mode="Markdown"
+        reply_markup=get_cancel_dialog_keyboard(),
+        parse_mode="HTML"
     )
     message_ids.append(sent_message.message_id)
     await state.update_data(message_ids=message_ids)
@@ -445,7 +447,8 @@ async def process_event_cost(message: Message, state: FSMContext):
         
         sent_message = await message.answer(
             LEXICON_RU["msg_event_ask_link"],
-            parse_mode="Markdown"
+            reply_markup=get_cancel_dialog_keyboard(),
+            parse_mode="HTML"
         )
         message_ids.append(sent_message.message_id)
         await state.update_data(message_ids=message_ids)
@@ -471,7 +474,9 @@ async def process_event_link(message: Message, state: FSMContext):
     await state.set_state(EventCreationStates.waiting_for_reminder_time)
 
     sent_message = await message.answer(
-        LEXICON_RU["msg_event_ask_reminder_time"]
+        LEXICON_RU["msg_event_ask_reminder_time"],
+        reply_markup=get_cancel_dialog_keyboard(),
+        parse_mode="HTML"
     )
     message_ids.append(sent_message.message_id)
     await state.update_data(message_ids=message_ids)
@@ -659,7 +664,7 @@ async def process_event_deletion(callback: CallbackQuery, callback_data: Confirm
     remove_event_jobs(event_id, scheduler)
     await db.delete_event(event_id)
     logger.warning(f"Admin {callback.from_user.id} deleted event {event_id}: {event_name}")
-    await callback.message.edit_text(LEXICON_RU["msg_event_deleted"].format(event_name=event_name))
+    await callback.message.edit_text(LEXICON_RU["msg_event_deleted"].format(event_name=html.escape(event_name)), reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 # --- FSM for Event Editing ---
@@ -672,7 +677,8 @@ async def process_edit_event_name(callback: CallbackQuery, state: FSMContext, ca
     event = await db.get_event(event_id)
     current_name = event['name'] or event['activity_name']
     await callback.message.edit_text(
-        LEXICON_RU["msg_event_edit_name"].format(current_name=current_name),
+        LEXICON_RU["msg_event_edit_name"].format(current_name=html.escape(current_name or "")),
+        reply_markup=get_cancel_dialog_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -683,7 +689,7 @@ async def update_event_name(message: Message, state: FSMContext):
     event_id = data['event_id']
     new_name = message.text if message.text != '.' else None
     await db.update_event(event_id, name=new_name)
-    await message.answer(LEXICON_RU["msg_event_name_updated"])
+    await message.answer(LEXICON_RU["msg_event_name_updated"], reply_markup=await get_event_edit_keyboard(event_id))
     await state.clear()
 
 @router.callback_query(EventEditAction.filter(F.action == "description"))
@@ -694,7 +700,8 @@ async def process_edit_event_description(callback: CallbackQuery, state: FSMCont
     event = await db.get_event(event_id)
     current_desc = event['description'] or event['activity_description']
     await callback.message.edit_text(
-        LEXICON_RU["msg_event_edit_description"].format(current_desc=current_desc),
+        LEXICON_RU["msg_event_edit_description"].format(current_desc=html.escape(current_desc or "")),
+        reply_markup=get_cancel_dialog_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -705,7 +712,7 @@ async def update_event_description(message: Message, state: FSMContext):
     event_id = data['event_id']
     new_desc = message.text if message.text != '.' else None
     await db.update_event(event_id, description=new_desc)
-    await message.answer(LEXICON_RU["msg_event_description_updated"])
+    await message.answer(LEXICON_RU["msg_event_description_updated"], reply_markup=await get_event_edit_keyboard(event_id))
     await state.clear()
 
 @router.callback_query(EventEditAction.filter(F.action == "schedule"))
@@ -754,7 +761,7 @@ async def update_event_date(message: Message, state: FSMContext, scheduler: Asyn
         event = await db.get_event(event_id)
         if event:
             await schedule_event_jobs(event, bot, scheduler)
-        await message.answer(LEXICON_RU["msg_event_date_updated"])
+        await message.answer(LEXICON_RU["msg_event_date_updated"], reply_markup=await get_event_edit_keyboard(event_id))
         await state.clear()
     except ValueError:
         await message.reply(LEXICON_RU["err_event_invalid_date_format"], parse_mode="HTML")
@@ -808,7 +815,7 @@ async def update_event_time(message: Message, state: FSMContext, scheduler: Asyn
         event = await db.get_event(event_id)
         if event:
             await schedule_event_jobs(event, bot, scheduler)
-        await message.answer(LEXICON_RU["msg_event_schedule_updated"])
+        await message.answer(LEXICON_RU["msg_event_schedule_updated"], reply_markup=await get_event_edit_keyboard(event_id))
         await state.clear()
     except ValueError:
         await message.reply(LEXICON_RU["err_event_invalid_time_format"], parse_mode="HTML")
@@ -824,7 +831,7 @@ async def process_edit_event_cost(callback: CallbackQuery, state: FSMContext, ca
     if event['activity_id'] == 1:
         text += LEXICON_RU["msg_event_edit_cost_warning"]
     text += LEXICON_RU["msg_event_edit_cost_prompt"]
-    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
     await callback.answer()
 
 @router.message(EventEditStates.waiting_for_new_cost)
@@ -836,7 +843,7 @@ async def update_event_cost(message: Message, state: FSMContext):
         data = await state.get_data()
         event_id = data['event_id']
         await db.update_event(event_id, cost=str(new_cost))
-        await message.answer(LEXICON_RU["msg_event_cost_updated"])
+        await message.answer(LEXICON_RU["msg_event_cost_updated"], reply_markup=await get_event_edit_keyboard(event_id))
         await state.clear()
     except (InvalidOperation, ValueError):
         await message.reply(LEXICON_RU["err_event_invalid_cost"])
@@ -848,7 +855,8 @@ async def process_edit_event_link(callback: CallbackQuery, state: FSMContext, ca
     await state.set_state(EventEditStates.waiting_for_new_link)
     event = await db.get_event(event_id)
     await callback.message.edit_text(
-        LEXICON_RU["msg_event_edit_link"].format(current_link=event['link']),
+        LEXICON_RU["msg_event_edit_link"].format(current_link=html.escape(event['link'] or "")),
+        reply_markup=get_cancel_dialog_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -858,7 +866,7 @@ async def update_event_link(message: Message, state: FSMContext):
     data = await state.get_data()
     event_id = data['event_id']
     await db.update_event(event_id, link=message.text)
-    await message.answer(LEXICON_RU["msg_event_link_updated"])
+    await message.answer(LEXICON_RU["msg_event_link_updated"], reply_markup=await get_event_edit_keyboard(event_id))
     await state.clear()
 
 @router.callback_query(EventEditAction.filter(F.action == "reminder"))
@@ -871,6 +879,7 @@ async def process_edit_event_reminder(callback: CallbackQuery, state: FSMContext
     current_time_str = f"За {current_time} мин." if current_time else LEXICON_RU["msg_event_no_reminder"]
     await callback.message.edit_text(
         LEXICON_RU["msg_event_edit_reminder_time"].format(current_time_str=current_time_str),
+        reply_markup=get_cancel_dialog_keyboard(),
         parse_mode="HTML"
     )
     await callback.answer()
@@ -896,7 +905,7 @@ async def update_event_reminder_time(message: Message, state: FSMContext, schedu
                 scheduler.remove_job(f"event_reminder_{event_id}")
             except Exception:
                 pass
-            await message.answer(LEXICON_RU["msg_event_reminder_disabled"])
+            await message.answer(LEXICON_RU["msg_event_reminder_disabled"], reply_markup=await get_event_edit_keyboard(event_id))
             await state.clear()
     except ValueError:
         await message.reply(LEXICON_RU["err_event_invalid_reminder_time"])
@@ -913,7 +922,7 @@ async def update_event_reminder_text(message: Message, state: FSMContext, schedu
     remove_event_jobs(event_id, scheduler)
     if event:
         await schedule_event_jobs(event, bot, scheduler)
-    await message.answer(LEXICON_RU["msg_event_reminder_updated"])
+    await message.answer(LEXICON_RU["msg_event_reminder_updated"], reply_markup=await get_event_edit_keyboard(event_id))
     await state.clear()
 
 

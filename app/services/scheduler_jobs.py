@@ -255,24 +255,22 @@ async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: date
     event_name = event['name'] or event['activity_name']
     event_description = event['description'] or event['activity_description']
     
-    reminder_text = event['reminder_text']
-    if reminder_text == ".":
+    from app.utils import safe_format_template
+    reminder_text = event.get('reminder_text')
+    if not reminder_text or reminder_text == ".":
         reminder_text = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
 
-    try:
-        formatted_text = reminder_text.format(
-            event_name=event_name,
-            event_description=event_description,
-            start_date=next_run_dt.strftime('%d.%m.%Y'),
-            start_time=next_run_dt.strftime('%H:%M') + f" ({MSK_LABEL})",
-            cost=format_amount(event['cost']),
-            currency_symbol=CURRENCY_SYMBOL,
-            reminder_minutes=event['reminder_time'],
-            link=event['link'] or ''
-        )
-    except KeyError as e:
-        logger.error(f"Invalid placeholder in reminder text for event {event['id']}: {e}")
-        formatted_text = f"Скоро начнется событие {event_name}"
+    formatted_text = safe_format_template(
+        reminder_text,
+        event_name=html.escape(event_name or ''),
+        event_description=html.escape(event_description or ''),
+        start_date=next_run_dt.strftime('%d.%m.%Y'),
+        start_time=next_run_dt.strftime('%H:%M') + f" ({MSK_LABEL})",
+        cost=format_amount(event['cost']),
+        currency_symbol=CURRENCY_SYMBOL,
+        reminder_minutes=event['reminder_time'],
+        link=event.get('link') or ''
+    )
 
     for user in participants:
         try:

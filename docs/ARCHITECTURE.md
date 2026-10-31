@@ -151,11 +151,11 @@ Tribute → POST /webhook/tribute → webhook_handler → Database → Telegram 
 |--------|----------------|------------------|
 | `common.py` | Базовые команды | `/start`, `/help`, `/gdp`, `/cancel` |
 | `user_commands.py` | Пользовательские операции | `/menu`, `/balance`, `/send`, `/history` |
-| `admin_commands.py` | Админ-панель | `/settings`, `/add`, `/rem`, `/users`, `/create_act` |
+| `admin_commands.py` | Админ-панель и Фонд | `/settings`, `/add`, `/rem`, `/pay_from_fund` (`/fund`), `/users`, `/check`, `/reset`, `/list_tag_rules`, `/add_tag_rule`, `/set_market_thread`, `/get_thread_id`, `/cancel_broadcast` |
 | `activity_handlers.py` | Управление активностями | Inline: act:, act_edit: |
 | `event_handlers.py` | Управление событиями | Inline: evt:, evt_edit:, evt_create: |
 | `tag_reward_handler.py` | Награды за хэштеги | Автоматическая обработка постов |
-| `offer_handlers.py` | Биржа объявлений | Inline: offer:, buy_offer: |
+| `offer_handlers.py` | Биржа объявлений | `/offer`, Inline: `off:buy`, `off:cancel`, `off:publish` |
 
 ### Services
 

@@ -74,14 +74,14 @@ def get_back_to_settings_keyboard(setting_action: str = None) -> InlineKeyboardM
     builder = InlineKeyboardBuilder()
     if setting_action:
         builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
     return builder.as_markup()
 
 async def get_welcome_bonus_setting_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для меню настройки Welcome-бонуса с кнопкой редактирования приветствия."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_edit_message"], callback_data=SettingsAction(action="edit_bonus_message").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
     return builder.as_markup()
     
 def confirm_delete_keyboard(item_type: str, item_id: int) -> InlineKeyboardMarkup:
@@ -337,7 +337,7 @@ async def get_event_edit_keyboard(event_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_event_link"], callback_data=EventEditAction(action="link", event_id=event_id).pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_event_reminder"], callback_data=EventEditAction(action="reminder", event_id=event_id).pack())
     )
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
     return builder.as_markup()
 
 def get_weekday_keyboard(selected_weekdays: list[int] = None) -> InlineKeyboardMarkup:
@@ -425,16 +425,24 @@ def get_welcome_group_prompt_keyboard(is_enabled: bool, setting_action: str = No
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback))
     if setting_action:
         builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
     return builder.as_markup()
 
 
 def get_offer_group_keyboard(offer_id: int, price) -> InlineKeyboardMarkup:
-    """Создает клавиатуру для объявления в группе с кнопкой Купить."""
+    """Создает клавиатуру для объявления в группе с кнопкой Купить и Снять с публикации."""
     from app.config import CURRENCY_SYMBOL
     builder = InlineKeyboardBuilder()
     btn_text = LEXICON_RU["btn_buy_offer"].format(price=price, currency_symbol=CURRENCY_SYMBOL)
     builder.row(InlineKeyboardButton(text=btn_text, callback_data=OfferAction(action="buy", offer_id=offer_id).pack()))
+    builder.row(InlineKeyboardButton(text="❌ Снять с публикации", callback_data=OfferAction(action="cancel", offer_id=offer_id).pack()))
+    return builder.as_markup()
+
+
+def get_cancel_dialog_keyboard() -> InlineKeyboardMarkup:
+    """Создает компактную клавиатуру с кнопкой Отмена для пошаговых FSM-диалогов."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack()))
     return builder.as_markup()
 
 

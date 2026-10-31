@@ -214,7 +214,7 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
         await state.update_data(message_ids=[message.message_id, sent_message.message_id])
         return
         
-    await message.reply(LEXICON_RU["err_transfer_format"], parse_mode="Markdown")
+    await message.reply(LEXICON_RU["err_transfer_format"], parse_mode="HTML")
 
 @router.message(TransferStates.waiting_for_recipient)
 async def process_recipient_input(message: Message, state: FSMContext, bot: Bot):

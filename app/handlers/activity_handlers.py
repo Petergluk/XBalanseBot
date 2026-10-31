@@ -39,8 +39,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.keyboards import (
     get_activities_keyboard, confirm_delete_keyboard, get_activity_view_keyboard,
     get_event_view_keyboard, get_activity_edit_menu_keyboard, get_broadcast_confirm_keyboard,
-    get_broadcast_schedule_keyboard
+    get_broadcast_schedule_keyboard, get_cancel_dialog_keyboard
 )
+import html
 from app.states import ActivityCreationStates, ActivityEditStates, BroadcastStates
 from app.database import db
 from app.utils import is_admin, format_amount, get_next_run_time
@@ -51,7 +52,7 @@ from app.callbacks import (
     ConfirmDeleteAction
 )
 from app.utils import (
-    is_admin, format_amount, get_next_run_time, format_weekdays
+    is_admin, format_amount, get_next_run_time, format_weekdays, safe_format_template
 )
 
 router = Router()
@@ -75,9 +76,12 @@ async def show_activities_list(target: Message | CallbackQuery):
 
     explanation_text = await db.get_setting('activities_description')
     if not explanation_text:
-        explanation_text = (
-            LEXICON_RU["msg_activities_default_desc"]
-        )
+        explanation_text = LEXICON_RU["msg_activities_default_desc"]
+
+    explanation_text = safe_format_template(
+        explanation_text,
+        username=target.from_user.mention_html() if target.from_user else "Участник"
+    )
 
     if not activities:
         explanation_text = LEXICON_RU["msg_activities_empty"]
@@ -375,7 +379,7 @@ async def start_activity_creation(message: Message, state: FSMContext):
     Запускает FSM-диалог для создания активности.
     """
     await state.set_state(ActivityCreationStates.waiting_for_name)
-    await message.answer(LEXICON_RU["msg_activity_ask_name"], parse_mode="Markdown")
+    await message.answer(LEXICON_RU["msg_activity_ask_name"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
 
 @router.message(Command("create_act", ignore_case=True))
 async def cmd_create_activity(message: Message, state: FSMContext):
@@ -389,13 +393,13 @@ async def cmd_create_activity(message: Message, state: FSMContext):
 async def process_activity_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(ActivityCreationStates.waiting_for_description)
-    await message.answer(LEXICON_RU["msg_activity_ask_description"], parse_mode="Markdown")
+    await message.answer(LEXICON_RU["msg_activity_ask_description"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
 
 @router.message(ActivityCreationStates.waiting_for_description)
 async def process_activity_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
     await state.set_state(ActivityCreationStates.waiting_for_end_date)
-    await message.answer(LEXICON_RU["msg_activity_ask_end_date"], parse_mode="Markdown")
+    await message.answer(LEXICON_RU["msg_activity_ask_end_date"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
 
 @router.message(ActivityCreationStates.waiting_for_end_date)
 async def process_activity_end_date(message: Message, state: FSMContext):
@@ -407,7 +411,7 @@ async def process_activity_end_date(message: Message, state: FSMContext):
         try:
             end_date = datetime.strptime(normalized_date_str, "%d.%m.%Y").date()
         except ValueError:
-            await message.reply(LEXICON_RU["err_activity_invalid_date"], parse_mode="Markdown")
+            await message.reply(LEXICON_RU["err_activity_invalid_date"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
             return
 
     data = await state.get_data()
@@ -469,8 +473,9 @@ async def start_edit_activity_field(callback: CallbackQuery, state: FSMContext, 
     prompt_text, new_state, current_value = prompts[field]
     await state.set_state(new_state)
     await callback.message.edit_text(
-        f"{prompt_text.format(current_value=current_value)}\n\n*Для отмены введите /cancel*",
-        parse_mode="Markdown"
+        f"{prompt_text.format(current_value=html.escape(current_value or ''))}\n\n<i>Для отмены нажмите кнопку ниже или введите /cancel</i>",
+        reply_markup=get_cancel_dialog_keyboard(),
+        parse_mode="HTML"
     )
     await callback.answer()
 

@@ -35,7 +35,11 @@ async def health_check(request: web.Request):
     и предотвращения "засыпания" сервиса.
     """
     logger.info("Health check endpoint '/' was requested.")
-    return web.Response(status=200, text="I'm awake!")
+    return web.Response(
+        status=200,
+        text="I'm awake!\n\nSystem Health Dashboard: /status",
+        content_type="text/plain"
+    )
 
 
 async def handle_tribute_webhook(request: web.Request):
@@ -165,10 +169,16 @@ async def handle_tribute_webhook(request: web.Request):
         logger.exception(f"Error processing Tribute webhook: {e}")
         return web.Response(status=500)
 
-async def run_webhook_server(bot: Bot, dp: Dispatcher):
-    """Запускает веб-сервер для приема вебхуков от Telegram и Tribute."""
+async def run_webhook_server(bot: Bot, dp: Dispatcher, scheduler=None):
+    """Запускает веб-сервер для приема вебхуков от Telegram и Tribute, а также дашборда."""
+    from app.services.dashboard import dashboard_page_handler, api_status_handler
+
     app = web.Application()
     app['bot'] = bot
+    if scheduler:
+        app['scheduler'] = scheduler
+    elif hasattr(dp, 'workflow_data') and 'scheduler' in dp.workflow_data:
+        app['scheduler'] = dp.workflow_data['scheduler']
     
     if WEBHOOK_SECRET_TOKEN:
         handler = SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET_TOKEN)
@@ -178,8 +188,10 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher):
     
     app.router.add_post('/webhook/tribute', handle_tribute_webhook)
     
-    # Регистрация обработчика для корневого URL
+    # Регистрация обработчиков
     app.router.add_get('/', health_check)
+    app.router.add_get('/status', dashboard_page_handler)
+    app.router.add_get('/api/status', api_status_handler)
 
     setup_application(app, dp, bot=bot)
     

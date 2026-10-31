@@ -494,3 +494,16 @@ def get_offer_duration_skip_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
     )
     return builder.as_markup()
+
+
+def get_status_keyboard(dashboard_url: str = None) -> InlineKeyboardMarkup:
+    """Создает клавиатуру для сообщения о статусе системы."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🔄 Обновить статус", callback_data=GeneralAction(action="refresh_status").pack())
+    )
+    if dashboard_url:
+        builder.row(
+            InlineKeyboardButton(text="🌐 Открыть веб-дашборд", url=dashboard_url)
+        )
+    return builder.as_markup()

@@ -904,3 +904,47 @@ async def cmd_set_market_thread(message: Message):
     else:
         await db.set_setting("market_thread_id", str(thread_id))
         await message.reply(f"✅ Топик для биржи обмена успешно установлен (ID темы: {thread_id}). Все новые объявления будут публиковаться сюда.")
+
+
+@router.message(Command("status", ignore_case=True))
+async def cmd_status(message: Message, bot: Bot, scheduler: AsyncIOScheduler = None):
+    """Выводит состояние всех систем и сервисов бота."""
+    wait_msg = await message.answer("⏳ <i>Опрашиваю сервисы (Koyeb, Supabase, Upstash, Telegram)...</i>", parse_mode="HTML")
+    try:
+        from app.services.dashboard import get_system_status, format_telegram_status, get_dashboard_url
+        from app.keyboards import get_status_keyboard
+
+        status_data = await get_system_status(bot=bot, scheduler=scheduler)
+        text = format_telegram_status(status_data)
+        url = get_dashboard_url()
+        keyboard = get_status_keyboard(dashboard_url=url)
+        await wait_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    except Exception as e:
+        logger.exception(f"Error checking status: {e}")
+        await wait_msg.edit_text(f"❌ Ошибка проверки статуса: {escape(str(e))}")
+
+
+@router.callback_query(GeneralAction.filter(F.action == "refresh_status"))
+async def callback_refresh_status(callback: CallbackQuery, bot: Bot, scheduler: AsyncIOScheduler = None):
+    """Обновляет статус системы по нажатию инлайн-кнопки."""
+    try:
+        from app.services.dashboard import get_system_status, format_telegram_status, get_dashboard_url
+        from app.keyboards import get_status_keyboard
+
+        status_data = await get_system_status(bot=bot, scheduler=scheduler)
+        text = format_telegram_status(status_data)
+        url = get_dashboard_url()
+        keyboard = get_status_keyboard(dashboard_url=url)
+
+        try:
+            await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+            await callback.answer("✅ Статус обновлен")
+        except Exception as edit_err:
+            if "message is not modified" in str(edit_err).lower():
+                await callback.answer("Данные уже актуальны")
+            else:
+                raise edit_err
+    except Exception as e:
+        logger.exception(f"Error refreshing status in callback: {e}")
+        await callback.answer("❌ Ошибка при обновлении", show_alert=True)
+

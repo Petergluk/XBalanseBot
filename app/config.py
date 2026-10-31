@@ -82,6 +82,7 @@ except ValueError:
     raise RuntimeError(f"❌ ERROR: Environment variable 'PORT' must be an integer, got: {PORT_RAW!r}")
 TRIBUTE_WEBHOOK_SECRET = os.environ.get("TRIBUTE_WEBHOOK_SECRET")
 WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN")
+WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST")
 
 
 # Переключатель режимов. По умолчанию - серверный (False).

@@ -194,6 +194,7 @@ async def setup_bot_commands(bot: Bot):
             BotCommand(command="users", description="👥 Список пользователей"),
             BotCommand(command="gide", description="📘 Гид по валюте"),
             BotCommand(command="test", description="🧪 Тестовые команды"),
+            BotCommand(command="status", description="🩺 Статус системы и сервисов"),
         ]
         try:
             await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=SUPER_ADMIN_ID))
@@ -275,7 +276,7 @@ async def main():
             else:
                 await bot.set_webhook(webhook_url, allowed_updates=allowed_updates)
             logger.info(f"Webhook set to: {webhook_url}")
-            await run_webhook_server(bot, dp)
+            await run_webhook_server(bot, dp, scheduler=scheduler)
 
     finally:
         if scheduler.running:

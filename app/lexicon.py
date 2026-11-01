@@ -10,7 +10,7 @@ LEXICON_RU: dict[str, str] = {
         "Привет, {username}! 👋\n\n"
         "Добро пожаловать в «Пространство» — сообщество для взаимной поддержки и обмена ценностями.\n\n"
         "У нас всего три простых правила:\n\n"
-        "1️⃣ Используем «Я-сообщения».\n"
+        "1️⃣ Используем <a href=\"https://t.me/danzasemantica/1420\">«Я-сообщения»</a>.\n"
         "2️⃣ Не занимаем без запроса экспертную позицию по отношению к другим.\n"
         "3️⃣ В любой непонятной ситуации прислушиваемся к себе и своим чувствам.\n\n"
         "Если ты согласен с этими правилами — жми кнопку ниже, и я выдам тебе ссылку для вступления в группу 👇"
@@ -670,6 +670,7 @@ LEXICON_RU: dict[str, str] = {
     "msg_admin_prompt_edit_bonus_message": "Введите текст начисления бонуса",
     "msg_admin_default_activities_desc": "<b>🎨 Активности сообщества</b>\n\nВыберите направление:",
     
+    "msg_admin_prompt_current_quote": "✏️ {desc}:\n\n<i>Текущее значение:</i>\n<blockquote>{current_val}</blockquote>",
     "msg_admin_prompt_current_long": "✏️ {desc}:\n\n<i>Текущее значение:</i>\n<pre>{current_val}</pre>",
     "msg_admin_prompt_current_short": "✏️ {desc}:\n\n<i>Текущее значение:</i>\n<code>{current_val}</code>",
     "msg_admin_prompt_variables": "\n\n<b>Доступные переменные (нажми, чтобы скопировать):</b>\n{tips}",

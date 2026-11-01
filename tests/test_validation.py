@@ -164,3 +164,20 @@ def test_format_transactions_history_collapses_daily_demurrage():
     ]
     history_html = format_transactions_history(txs, user_db_id=42)
     assert "📉 Демерредж за 3 дн.: -15" in history_html
+
+
+def test_clean_template_html():
+    """Проверяет снятие случайного внешнего обрамления <pre> или <code> с сохранением ссылок."""
+    from app.handlers.admin_commands import _clean_template_html
+
+    # Снятие внешних <pre>...</pre>
+    assert _clean_template_html("<pre>Привет, мир!</pre>") == "Привет, мир!"
+    # Снятие внешних <code>...</code>
+    assert _clean_template_html("<code>Привет, мир!</code>") == "Привет, мир!"
+    # Сохранение внутренних ссылок при снятии внешней <pre>
+    html_with_link = '<pre>1️⃣ Используем <a href="https://t.me/danzasemantica/1420">«Я-сообщения»</a>.</pre>'
+    cleaned = _clean_template_html(html_with_link)
+    assert cleaned == '1️⃣ Используем <a href="https://t.me/danzasemantica/1420">«Я-сообщения»</a>.'
+    # Не трогает обычный текст без тегов кода
+    normal = 'Привет, {username}! <a href="https://example.com">клик</a>'
+    assert _clean_template_html(normal) == normal

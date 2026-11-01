@@ -58,6 +58,21 @@ async def admin_callback_middleware(handler, event: CallbackQuery, data):
     return await handler(event, data)
 
 
+def _clean_template_html(raw_html: str) -> str:
+    """
+    Очищает HTML шаблона от случайного внешнего обрамления в <pre> или <code>,
+    если администратор скопировал текст из Telegram как блок кода.
+    """
+    if not raw_html:
+        return ""
+    text = raw_html.strip()
+    if text.startswith("<pre>") and text.endswith("</pre>"):
+        text = text[5:-6].strip()
+    elif text.startswith("<code>") and text.endswith("</code>"):
+        text = text[6:-7].strip()
+    return text
+
+
 # --- HELPERS ---
 
 async def _parse_user_amount_comment(message: Message) -> tuple | None:
@@ -442,12 +457,20 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
     if action in prompts:
         desc, db_key, default_val, new_state = prompts[action]
         current_val = str(await db.get_setting(db_key, default_val))
-        
-        if len(current_val) > 30 or '\n' in current_val:
-            prompt_text = LEXICON_RU["msg_admin_prompt_current_long"].format(desc=desc, current_val=current_val)
+
+        is_rich_text = action in (
+            "edit_welcome_bot", "edit_welcome_group", "edit_reminder",
+            "edit_activities_desc", "edit_bonus_message"
+        )
+        display_val = _clean_template_html(current_val)
+
+        if is_rich_text:
+            prompt_text = LEXICON_RU["msg_admin_prompt_current_quote"].format(desc=desc, current_val=display_val)
+        elif len(display_val) > 30 or '\n' in display_val:
+            prompt_text = LEXICON_RU["msg_admin_prompt_current_long"].format(desc=desc, current_val=display_val)
         else:
-            prompt_text = LEXICON_RU["msg_admin_prompt_current_short"].format(desc=desc, current_val=current_val)
-        
+            prompt_text = LEXICON_RU["msg_admin_prompt_current_short"].format(desc=desc, current_val=display_val)
+
         if action in variable_tooltips:
             tips = " ".join([f"{t}" for t in variable_tooltips[action]])
             prompt_text += LEXICON_RU["msg_admin_prompt_variables"].format(tips=tips)
@@ -579,7 +602,13 @@ async def _update_setting_and_finish(message: Message, state: FSMContext, key: s
         await show_main_menu(message)
         return
     try:
-        value = value_transformer(message.text)
+        if value_transformer == str:
+            # Для текстовых шаблонов сохраняем HTML-разметку (ссылки, жирный текст) и снимаем случайное обрамление в <pre>/<code>
+            raw_html = message.html_text or message.text or ""
+            value = _clean_template_html(raw_html)
+        else:
+            value = value_transformer(message.text)
+
         if validator:
             error_msg = validator(value)
             if error_msg:
@@ -625,7 +654,9 @@ async def process_reminder_text(message: Message, state: FSMContext):
 
 @router.message(AdminEditStates.waiting_for_activities_description)
 async def process_activities_description_update(message: Message, state: FSMContext):
-    await db.set_setting('activities_description', message.text)
+    raw_html = message.html_text or message.text or ""
+    value = _clean_template_html(raw_html)
+    await db.set_setting('activities_description', value)
     await state.clear()
     await message.answer(LEXICON_RU["msg_admin_activities_desc_updated"])
     # Показываем результат

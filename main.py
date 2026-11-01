@@ -123,7 +123,7 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                 
                 private_commands = {
                     "/menu", "/balance", "/баланс", "/history", "/settings",
-                    "/users", "/check", "/add", "/rem", "/make_admin", "/remove_admin",
+                    "/users", "/check", "/rem", "/make_admin", "/remove_admin",
                     "/list_tag_rules", "/add_tag_rule", "/create_act", "/create_event",
                     "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start"
                 }
@@ -135,7 +135,7 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     )
                     return
                 
-                if command == "/send" and len(parts) < 3:
+                if command in ("/send", "/add") and len(parts) < 3:
                     await event.reply(
                         "❌ В группе поддерживается только быстрый перевод:\n"
                         "<code>/send @username сумма [комментарий]</code>",
@@ -206,6 +206,14 @@ async def setup_bot_commands(bot: Bot):
 async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
     """Configure the background scheduler."""
     scheduler.add_job(scheduler_jobs.process_demurrage, CronTrigger(hour=0, minute=1), args=(bot,))
+    scheduler.add_job(
+        scheduler_jobs.process_scheduled_broadcasts,
+        'interval',
+        minutes=1,
+        args=(bot,),
+        id='process_scheduled_broadcasts',
+        replace_existing=True,
+    )
 
     all_events = await db.get_all_events()
     for event in all_events:

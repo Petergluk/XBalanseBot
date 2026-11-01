@@ -70,31 +70,29 @@ def format_amount(amount: Decimal) -> str:
 
 def validate_amount(text: str, max_value: Decimal = Decimal('1000000')) -> Decimal:
     """
-    Парсит и валидирует денежную сумму с защитой от переполнений.
+    Парсит и валидирует целочисленную сумму в орфах (1 Ӫ неделим).
     """
     try:
-        amount = Decimal(text.replace(',', '.'))
+        amount = Decimal(str(text).strip().replace(',', '.'))
         if amount <= 0:
             raise ValueError("Amount must be positive")
+        if amount != amount.to_integral_value():
+            raise ValueError("Amount must be an integer (Orf is indivisible)")
         if amount > max_value:
             raise ValueError(f"Amount exceeds maximum {max_value}")
-        return amount
+        return amount.to_integral_value()
     except (InvalidOperation, ValueError):
         raise ValueError("Invalid amount format")
 
 def format_transactions_history(transactions: list, user_db_id: int) -> str:
     """
     Форматирует список транзакций в текстовый отчет по категориям.
-
-    Args:
-        transactions (list): Список транзакций (объекты sqlite3.Row).
-        user_db_id (int): ID пользователя в БД, для которого строится отчет.
-
-    Returns:
-        str: Отформатированный HTML-текст истории.
+    Ежедневный демерредж схлопывается в одну итоговую сводную строку (сумма + число дней).
     """
     response_parts = []
-    top_ups, incoming, outgoing, system_debits = [], [], [], []
+    top_ups, incoming, outgoing, manual_rems = [], [], [], []
+    demurrage_total = Decimal('0')
+    demurrage_days_count = 0
 
     for tx in transactions:
         if tx['to_user_id'] == user_db_id:
@@ -105,8 +103,11 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
         elif tx['from_user_id'] == user_db_id:
             if tx['type'] in ('transfer', 'event_fee', 'purchase'):
                 outgoing.append(tx)
-            elif tx['type'] in ('demurrage', 'manual_rem'):
-                system_debits.append(tx)
+            elif tx['type'] == 'demurrage':
+                demurrage_total += Decimal(str(tx['amount']))
+                demurrage_days_count += 1
+            elif tx['type'] == 'manual_rem':
+                manual_rems.append(tx)
 
     import html
     def format_tx_line(tx, sign, prefix="", peer_name=""):
@@ -121,14 +122,16 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
         response_parts.append("\n\n💰 <b>Пополнения:</b>\n")
         for tx in top_ups:
             response_parts.append(format_tx_line(tx, "✅ +"))
-    
+
     if incoming:
         response_parts.append("\n📥 <b>Входящие переводы и продажи:</b>\n")
         for tx in incoming:
-            if tx['sender_username'] == 'fund' or tx['type'] == 'fund_payment':
+            if tx.get('sender_username') == 'fund' or tx['type'] == 'fund_payment':
                 peer = "Фонда"
+            elif tx.get('sender_username') == 'treasury':
+                peer = "Игровой казны"
             else:
-                peer = f"@{tx['sender_username']}" if tx['sender_username'] else "Пользователь"
+                peer = f"@{tx['sender_username']}" if tx.get('sender_username') else "Пользователь"
             response_parts.append(format_tx_line(tx, "➕", prefix="от ", peer_name=peer))
 
     if outgoing:
@@ -136,18 +139,23 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
         for tx in outgoing:
             if tx['type'] == 'event_fee':
                 peer = "Мероприятие"
-            elif tx['recipient_username'] == 'fund':
+            elif tx.get('recipient_username') == 'fund':
                 peer = "Фонд"
+            elif tx.get('recipient_username') == 'treasury':
+                peer = "Игровая казна"
             else:
-                peer = f"@{tx['recipient_username']}" if tx['recipient_username'] else "Пользователь"
+                peer = f"@{tx['recipient_username']}" if tx.get('recipient_username') else "Пользователь"
             response_parts.append(format_tx_line(tx, "➖ -", peer_name=peer))
 
-    if system_debits:
+    if demurrage_days_count > 0 or manual_rems:
         response_parts.append("\n💸 <b>Системные списания:</b>\n")
-        for tx in system_debits:
-            peer = "Техническое списание" if tx['type'] == 'manual_rem' else "Демерредж"
-            response_parts.append(format_tx_line(tx, "➖ -", peer_name=peer))
-            
+        if demurrage_days_count > 0:
+            response_parts.append(
+                f"  📉 Демерредж за {demurrage_days_count} дн.: -{format_amount(demurrage_total)} {CURRENCY_SYMBOL}\n"
+            )
+        for tx in manual_rems:
+            response_parts.append(format_tx_line(tx, "➖ -", peer_name="Техническое списание"))
+
     return "".join(response_parts)
 
 async def get_user_balance(telegram_id: int) -> Decimal:

@@ -179,12 +179,10 @@ async def process_offer_desc(message: Message, state: FSMContext, bot: Bot):
 # --- Ввод цены ---
 @router.message(OfferCreationStates.waiting_for_price)
 async def process_offer_price(message: Message, state: FSMContext, bot: Bot):
-    price_str = (message.text or "").strip().replace(",", ".")
+    from app.utils import validate_amount
     try:
-        price = Decimal(price_str)
-        if price <= 0:
-            raise ValueError()
-    except (InvalidOperation, ValueError):
+        price = validate_amount(message.text or "")
+    except ValueError:
         # Ошибка ввода цены
         prompt = await message.answer(
             LEXICON_RU["err_offer_price_invalid"],

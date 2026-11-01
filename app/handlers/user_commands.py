@@ -87,14 +87,22 @@ async def cancel_transfer_dialog(message: Message, state: FSMContext, bot: Bot):
 # --- БЛОК ГЛАВНОГО МЕНЮ ---
 
 async def show_main_menu(message: Message | CallbackQuery):
+    from app.config import SUPER_ADMIN_ID
     user_id = message.from_user.id
-    balance = await get_user_balance(user_id)
-    text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
-    
     bot = message.bot
     is_member = await check_is_group_member(bot, user_id)
+
+    user = await db.get_user(telegram_id=user_id)
+    if not user and user_id != SUPER_ADMIN_ID:
+        if not is_member:
+            await common_handlers.send_onboarding_prompt(message)
+            return
+        await ensure_user_exists(user_id, message.from_user.username, message.from_user.is_bot)
+
+    balance = await get_user_balance(user_id)
+    text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
     keyboard = get_main_menu_keyboard(is_member=is_member)
-    
+
     if isinstance(message, Message):
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     elif isinstance(message, CallbackQuery):
@@ -276,8 +284,9 @@ async def process_amount_input(message: Message, state: FSMContext):
         await state.update_data(message_ids=message_ids)
         return
         
+    from app.config import SUPER_ADMIN_ID
     sender_balance = await get_user_balance(message.from_user.id)
-    if sender_balance < amount:
+    if message.from_user.id != SUPER_ADMIN_ID and sender_balance < amount:
         from app.keyboards import get_back_to_menu_keyboard
         sent_message = await message.reply(
             LEXICON_RU["err_insufficient_funds"].format(balance=format_amount(sender_balance), currency_symbol=CURRENCY_SYMBOL),
@@ -430,6 +439,7 @@ async def cmd_gdp(message: Message):
         turnover_all=format_amount(stats['turnover_all']['turnover']),
         tx_count_all=stats['turnover_all']['tx_count'],
         total_supply=format_amount(stats['total_supply']),
-        fund_balance=format_amount(stats['fund_balance'])
+        fund_balance=format_amount(stats['fund_balance']),
+        treasury_balance=format_amount(stats.get('treasury_balance', Decimal('0')))
     )
     await message.answer(response, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")

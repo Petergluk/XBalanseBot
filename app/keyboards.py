@@ -74,14 +74,15 @@ def get_back_to_settings_keyboard(setting_action: str = None) -> InlineKeyboardM
     builder = InlineKeyboardBuilder()
     if setting_action:
         builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 
 async def get_welcome_bonus_setting_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для меню настройки Welcome-бонуса с кнопкой редактирования приветствия."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_edit_message"], callback_data=SettingsAction(action="edit_bonus_message").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
+    builder.row(InlineKeyboardButton(text="🏦 Источник бонусов", callback_data=SettingsAction(action="menu_bonus_source").pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
     
 def confirm_delete_keyboard(item_type: str, item_id: int) -> InlineKeyboardMarkup:
@@ -381,8 +382,32 @@ async def get_settings_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_tag_rules"], callback_data=SettingsAction(action="menu_tag_rules").pack())
     )
     
-    # Кнопка настройки топиков
+    # Кнопки настройки источника бонусов и топиков
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_bonus_source"], callback_data=SettingsAction(action="menu_bonus_source").pack()))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_topics"], callback_data=SettingsAction(action="menu_topics").pack()))
+    return builder.as_markup()
+
+
+def get_bonus_source_settings_keyboard(current_mode: str = "stepwise") -> InlineKeyboardMarkup:
+    """Клавиатура 3-позиционного переключателя источника велком-бонусов и наград за теги."""
+    mode = (current_mode or "stepwise").strip().lower()
+    if mode == "monarch":
+        mode = "treasury"
+    builder = InlineKeyboardBuilder()
+    options = [
+        ("treasury", "👑 Сразу из Игровой казны"),
+        ("fund", "🏛 Только из Общего фонда (id=0)"),
+        ("stepwise", "🔄 Ступенчато: Фонд → Игровая казна"),
+    ]
+    for key, label in options:
+        mark = "✅ " if mode == key else ""
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=SettingsAction(action=f"set_bonus_source_{key}").pack(),
+            )
+        )
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 
 
@@ -425,7 +450,7 @@ def get_welcome_group_prompt_keyboard(is_enabled: bool, setting_action: str = No
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback))
     if setting_action:
         builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
-    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_event_view"], callback_data=EventAction(action="view_in_activity", event_id=event_id).pack()))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
 
 

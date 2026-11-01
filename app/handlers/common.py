@@ -86,34 +86,58 @@ async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+async def send_onboarding_prompt(target: Message | CallbackQuery):
+    """Отправляет экран приветствия с правилами и кнопкой «Я согласен с правилами»."""
+    welcome_text_template = await db.get_setting('welcome_message_bot', LEXICON_RU["default_welcome_bot"])
+    welcome_text = welcome_text_template.replace('{username}', target.from_user.mention_html())
+
+    from app.keyboards import get_onboarding_keyboard
+    if isinstance(target, CallbackQuery) and getattr(target, "message", None) is not None and isinstance(getattr(target, "data", None), str):
+        try:
+            await target.message.edit_text(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
+        except Exception:
+            await target.bot.send_message(target.from_user.id, welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
+        await target.answer()
+    else:
+        await target.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
+
+
 @router.message(CommandStart(ignore_case=True))
 async def cmd_start(message: Message, state: FSMContext):
     """
     Обработчик команды /start.
+    Новые пользователи, ещё не состоящие в группе и не принявшие правила,
+    не записываются в БД до нажатия кнопки «Я согласен с правилами».
     """
     if message.from_user.is_bot:
         return
-        
+
     await state.clear()
     logger.info(f"User {message.from_user.id} (@{message.from_user.username}) started bot")
-    
+
+    from app.config import SUPER_ADMIN_ID
     user = await db.get_user(telegram_id=message.from_user.id)
     is_new = not bool(user)
-    
+
+    if is_new and message.from_user.id != SUPER_ADMIN_ID:
+        is_member = await check_is_group_member(message.bot, message.from_user.id)
+        if not is_member:
+            await send_onboarding_prompt(message)
+            logger.info(f"Sent onboarding message to new unverified user {message.from_user.id}")
+            return
+
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
-    
+
     # Гарантируем права суперадмина при каждом /start
-    from app.config import SUPER_ADMIN_ID
     if message.from_user.id == SUPER_ADMIN_ID:
         user_db = await db.get_user(telegram_id=SUPER_ADMIN_ID)
         if user_db and not user_db['is_admin']:
             await db.set_admin_status(SUPER_ADMIN_ID, True)
             logger.info(f"Super admin {SUPER_ADMIN_ID} re-promoted via /start")
-    
+
     if not is_new:
         stats = await db.get_returning_user_stats(message.from_user.id)
         if stats and (stats['sent'] > 0 or stats['received'] > 0 or stats['deducted'] > 0):
-            # Returning active user — show full stats greeting
             text = LEXICON_RU["msg_welcome_back"].format(
                 mention=message.from_user.mention_html(),
                 balance=format_amount(stats['balance']),
@@ -125,20 +149,15 @@ async def cmd_start(message: Message, state: FSMContext):
             from app.keyboards import get_back_to_menu_keyboard
             await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
         else:
-            # Already in DB but no transactions yet — playful short greeting, then menu
             text = LEXICON_RU["msg_welcome_back_simple"].format(
                 mention=message.from_user.mention_html()
             )
             from app.keyboards import get_back_to_menu_keyboard
             await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
         return
-        
-    # Пользователь новый -> Начинаем онбординг
-    welcome_text_template = await db.get_setting('welcome_message_bot', LEXICON_RU["default_welcome_bot"])
-    welcome_text = welcome_text_template.replace('{username}', message.from_user.mention_html())
-    
-    from app.keyboards import get_onboarding_keyboard
-    await message.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
+
+    # Если пользователь уже был в группе, но впервые запустил бота
+    await send_onboarding_prompt(message)
     logger.info(f"Sent onboarding message to new user {message.from_user.id}")
 
 async def send_invite_link(target: Message | CallbackQuery):
@@ -190,8 +209,26 @@ async def send_invite_link(target: Message | CallbackQuery):
 
 @router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
 async def process_onboarding_agree(callback: CallbackQuery):
-    """Обработка нажатия кнопки 'Согласен'."""
+    """Обработка нажатия кнопки 'Согласен': регистрирует пользователя и выдаёт инвайт-ссылку."""
     await callback.answer()
+    await ensure_user_exists(callback.from_user.id, callback.from_user.username, callback.from_user.is_bot)
+
+    # Если участник уже состоит в группе на момент принятия правил — начисляем велком-бонус (если ещё не получал)
+    if await check_is_group_member(callback.bot, callback.from_user.id):
+        credited = await _credit_welcome_bonus(callback.from_user.id, "Велком-бонус после принятия правил")
+        if credited > 0:
+            bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
+            bonus_text = safe_format_template(
+                bonus_text_template,
+                amount=format_amount(credited),
+                currency_symbol=CURRENCY_SYMBOL,
+                username=html.escape(callback.from_user.full_name or callback.from_user.first_name or "Участник")
+            )
+            try:
+                await callback.bot.send_message(callback.from_user.id, bonus_text, parse_mode="HTML")
+            except Exception as e:
+                logger.warning(f"Could not send welcome bonus DM after onboarding_agree to {callback.from_user.id}: {e}")
+
     await send_invite_link(callback)
 
 @router.callback_query(GeneralAction.filter(F.action == "get_invite_link"))

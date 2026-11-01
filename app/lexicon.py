@@ -477,6 +477,14 @@ LEXICON_RU: dict[str, str] = {
         "Баланс: <b>{balance} {currency_symbol}</b>"
     ),
     "btn_tag_rules": "🏷 Поощрения",
+    "btn_menu_bonus_source": "🏦 Источник бонусов (Казна / Фонд)",
+    "msg_admin_bonus_source_status": (
+        "🏦 <b>Источник велком-бонусов и наград за теги</b>\n\n"
+        "Текущий режим: <b>{mode_label}</b>\n\n"
+        "• <b>Сразу из Игровой казны</b> — бонусы эмитируются в минус со счёта Супер-админа.\n"
+        "• <b>Только из Общего фонда</b> — бонусы выплачиваются только из накопленного демерреджа на счёте <code>id=0</code>.\n"
+        "• <b>Ступенчато</b> — сначала расходуется накопленный демерредж из Общего фонда (<code>id=0</code>), а недостающая часть эмитируется в минус из Игровой казны."
+    ),
     "btn_menu_topics": "📢 Настройка топиков",
     "msg_tag_rules_list_empty": "ℹ️ Нет активных правил. Добавьте первое: /add_tag_rule",
     "msg_tag_rules_list_header": "🏷 <b>Правила начисления по хэштегам:</b>\n\n",
@@ -610,13 +618,14 @@ LEXICON_RU: dict[str, str] = {
     # === GDP (ВВП) ===
     "msg_gdp_stats": (
         "📊 <b>Экономика сообщества:</b>\n\n"
-        "💱 <b>Оборот (переводы между пользователями):</b>\n"
+        "💱 <b>Оборот (переводы и сделки):</b>\n"
         "• За 7 дней: {turnover_7d} {currency_symbol} ({tx_count_7d} транзакций)\n"
         "• За 30 дней: {turnover_30d} {currency_symbol} ({tx_count_30d} транзакций)\n"
         "• За все время: {turnover_all} {currency_symbol} ({tx_count_all} транзакций)\n\n"
-        "💰 <b>Денежная масса:</b>\n"
-        "• Всего в системе: {total_supply} {currency_symbol}\n"
-        "• В фонде сообщества: {fund_balance} {currency_symbol}"
+        "💰 <b>Денежная масса (Σ = 0):</b>\n"
+        "• В обращении: {total_supply} {currency_symbol}\n"
+        "• В Общем фонде (id=0): {fund_balance} {currency_symbol}\n"
+        "• Игровая казна: {treasury_balance} {currency_symbol}"
     ),
 
     # === Администрирование (Команды администратора) ===
@@ -626,7 +635,7 @@ LEXICON_RU: dict[str, str] = {
     "err_admin_format": "❌ Неверный формат. Используйте:\n<code>{command} @username сумма [комментарий]</code>",
     "err_admin_format_username": "❌ Формат: {command} @username",
     "err_admin_format_retry": "❌ Неверный формат. Попробуйте еще раз.",
-    "err_admin_invalid_amount": "❌ Неверная сумма. Укажите положительное число.",
+    "err_admin_invalid_amount": "❌ Неверная сумма. Укажите целое положительное число (1 Ӫ неделим).",
     "err_admin_user_not_found": "❌ Пользователь @{username} не найден.",
     "err_admin_specify_username": "❌ Укажите @username пользователя для проверки.",
     "msg_admin_balance_changed": "✅ {action_word} <b>{amount} {currency_symbol}</b> {preposition} счет пользователя @{username}.",
@@ -708,7 +717,7 @@ LEXICON_RU: dict[str, str] = {
 
     "msg_offer_prompt_title": "✏️ Введите <b>название</b> товара или услуги (до 100 символов):\n\n<i>Например: Книга по Python, Консультация по маркетингу</i>",
     "msg_offer_prompt_desc": "✏️ Введите <b>описание</b> (подробности, условия обмена, контакты):\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
-    "msg_offer_prompt_price": "✏️ Укажите <b>цену</b> в {currency_symbol} (число > 0):",
+    "msg_offer_prompt_price": "✏️ Укажите <b>цену</b> в {currency_symbol} (целое число > 0, орф неделим):",
     "msg_offer_prompt_quantity": "✏️ Укажите <b>количество</b> доступных сделок/товаров (целое число > 0, по умолчанию 1):\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
     "msg_offer_prompt_duration": "✏️ Укажите <b>срок актуальности</b> объявления в днях (по умолчанию 14):\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
     "msg_offer_prompt_photo": "📷 Отправьте <b>одно фото</b> товара.\n\n<i>Вы можете пропустить этот шаг, нажав кнопку ниже.</i>",
@@ -758,7 +767,7 @@ LEXICON_RU: dict[str, str] = {
     "msg_offer_created_success": "✅ Ваше объявление успешно создано и опубликовано в группе!",
     "msg_offer_cancelled_success": "✅ Объявление успешно отменено.",
 
-    "err_offer_price_invalid": "❌ Пожалуйста, введите положительное число. Например: 100 или 25.5",
+    "err_offer_price_invalid": "❌ Пожалуйста, введите целое положительное число (орф неделим). Например: 100 или 250",
     "err_offer_quantity_invalid": "❌ Пожалуйста, введите целое положительное число для количества (например: 1, 3, 5).",
     "err_offer_duration_invalid": "❌ Пожалуйста, введите целое число дней больше 0 (например: 7, 14, 30).",
     "err_offer_photo_invalid": "❌ Пожалуйста, отправьте именно фото (картинку) или нажмите кнопку пропуска.",

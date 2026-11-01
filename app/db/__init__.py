@@ -10,6 +10,7 @@ from app.db.transactions import TransactionRepository
 from app.db.offers import OfferRepository
 from app.db.tags import TagRewardRepository
 from app.db.settings import SettingRepository
+from app.db.broadcasts import BroadcastRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ class Database(
     TransactionRepository,
     OfferRepository,
     TagRewardRepository,
-    SettingRepository
+    SettingRepository,
+    BroadcastRepository
 ):
     """Единый фасад для всех репозиториев базы данных (паттерн Facade)."""
     def __init__(self, conninfo: str):

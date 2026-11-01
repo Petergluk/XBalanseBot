@@ -177,19 +177,35 @@ class TestCmdSend:
 
     @pytest.mark.asyncio
     async def test_process_amount_insufficient_funds(self):
-        """Ввод суммы больше баланса должен показать ошибку."""
+        """Ввод суммы больше баланса обычным участником должен показать ошибку."""
         import app.handlers.user_commands as uc_mod
         from app.handlers.user_commands import process_amount_input
 
         with patch.object(uc_mod, 'get_user_balance', new_callable=AsyncMock, return_value=Decimal("50")), \
              patch.object(uc_mod, 'get_back_to_menu_keyboard', return_value=None):
-            msg = make_message("100")
-            state = make_state({'recipient_id': 1, 'recipient_telegram_id': 1001, 'recipient_username': 'bob', 'message_ids': []})
+            msg = make_message("100", user_id=1001, username="regular_user")
+            state = make_state({'recipient_id': 1, 'recipient_telegram_id': 1002, 'recipient_username': 'bob', 'message_ids': []})
             await process_amount_input(msg, state)
 
             msg.reply.assert_called_once()
             call_text = msg.reply.call_args[0][0]
             assert "Недостаточно" in call_text
+
+    @pytest.mark.asyncio
+    async def test_process_amount_super_admin_treasury_allows_negative(self):
+        """Супер-админ («Игровая казна») может переводить орфы через /send даже при нулевом или отрицательном балансе (STEP-10)."""
+        import app.handlers.user_commands as uc_mod
+        from app.handlers.user_commands import process_amount_input
+        from app.config import SUPER_ADMIN_ID
+
+        with patch.object(uc_mod, 'get_user_balance', new_callable=AsyncMock, return_value=Decimal("-500")), \
+             patch.object(uc_mod, 'get_back_to_menu_keyboard', return_value=None):
+            msg = make_message("100", user_id=SUPER_ADMIN_ID, username="treasury")
+            state = make_state({'recipient_id': 1, 'recipient_telegram_id': 1002, 'recipient_username': 'bob', 'message_ids': []})
+            await process_amount_input(msg, state)
+
+            msg.reply.assert_not_called()
+            msg.answer.assert_called_once()
 
 
 
@@ -737,3 +753,35 @@ async def test_tribute_webhook_secret_validation(monkeypatch):
 
     resp = await webhook_handler.handle_tribute_webhook(fake_req)
     assert resp.status == 403
+
+
+
+@pytest.mark.asyncio
+async def test_start_onboarding_bypass_blocked_until_agreed():
+    """Новый пользователь не создается в БД при /start, пока не нажмёт «Я согласен с правилами» (STEP-8)."""
+    import app.handlers.common as common_mod
+    from app.handlers.common import cmd_start, process_onboarding_agree
+
+    with patch.object(common_mod.db, 'get_user', new_callable=AsyncMock, return_value=None), \
+         patch.object(common_mod.db, 'get_setting', new_callable=AsyncMock, return_value="Привет, {username}!"), \
+         patch.object(common_mod, 'check_is_group_member', new_callable=AsyncMock, return_value=False), \
+         patch.object(common_mod, 'ensure_user_exists', new_callable=AsyncMock) as mock_ensure, \
+         patch.object(common_mod, 'send_invite_link', new_callable=AsyncMock) as mock_invite:
+        msg = make_message("/start", user_id=555001, username="newcomer")
+        msg.from_user.mention_html = MagicMock(return_value="@newcomer")
+        state = make_state()
+
+        # Первый и повторный вызов /start без нажатия кнопки согласия
+        await cmd_start(msg, state)
+        await cmd_start(msg, state)
+
+        # Запись в БД ещё НЕ должна создаваться!
+        mock_ensure.assert_not_called()
+        assert msg.answer.call_count == 2
+
+        # Нажатие кнопки «Я согласен с правилами»
+        cb = make_callback("gen:onboarding_agree", user_id=555001, username="newcomer")
+        await process_onboarding_agree(cb)
+
+        mock_ensure.assert_called_once_with(555001, "newcomer", False)
+        mock_invite.assert_called_once()

@@ -217,3 +217,50 @@ async def test_transfer_from_fund_and_debt_reset(db):
     updated_user = await db.get_user(telegram_id=777001)
     assert updated_user["balance"] == Decimal("30")
     assert updated_user["grace_credit_used"] is False
+
+
+
+@pytest.mark.asyncio
+async def test_zero_sum_treasury_and_stepwise_bonus(db):
+    """Проверяет закон сохранения (Σ = 0) между Игровой казной (SUPER_ADMIN_ID), Общим фондом (id=0) и участниками (STEP-10)."""
+    from app.config import SUPER_ADMIN_ID
+
+    await db.create_user(telegram_id=SUPER_ADMIN_ID, username="treasury", is_admin=True)
+    await db.create_user(telegram_id=888001, username="member1")
+    member = await db.get_user(telegram_id=888001)
+
+    # 1. Перевод из Игровой казны (/send от Супер-админа) уводит Игровую казну в минус
+    res = await db.transfer(SUPER_ADMIN_ID, member["id"], Decimal("250"), "Эмиссия из Игровой казны")
+    assert res["success"] is True
+    assert res["is_treasury"] is True
+
+    treasury = await db.get_user(telegram_id=SUPER_ADMIN_ID)
+    member = await db.get_user(telegram_id=888001)
+    assert treasury["balance"] == Decimal("-250")
+    assert member["balance"] == Decimal("250")
+
+    # 2. Ступенчатый велком-бонус (stepwise): в Фонде (id=0) лежит 40 орфов, бонус 100 орфов ->
+    # 40 списывается из Фонда (до 0), а 60 добирается в минус из Игровой казны (-250 - 60 = -310).
+    async with db.pool.connection() as conn:
+        await conn.execute("UPDATE users SET balance = 40 WHERE id = 0")
+        await conn.execute("UPDATE users SET balance = -210 WHERE telegram_id = %s", (SUPER_ADMIN_ID,))
+
+    await db.set_setting("welcome_bonus_amount", "100")
+    await db.set_setting("bonus_source_mode", "stepwise")
+    await db.create_user(telegram_id=888002, username="new_member")
+
+    credited = await db.credit_welcome_bonus(888002, "Ступенчатый велком-бонус")
+    assert credited == Decimal("100")
+
+    new_member = await db.get_user(telegram_id=888002)
+    treasury = await db.get_user(telegram_id=SUPER_ADMIN_ID)
+    async with db.pool.connection() as conn:
+        cur = await conn.execute("SELECT balance FROM users WHERE id = 0")
+        fund_bal = (await cur.fetchone())[0]
+        cur_sum = await conn.execute("SELECT SUM(balance) FROM users")
+        total_system_sum = (await cur_sum.fetchone())[0]
+
+    assert fund_bal == Decimal("0")
+    assert new_member["balance"] == Decimal("100")
+    assert treasury["balance"] == Decimal("-270")
+    assert total_system_sum == Decimal("0")

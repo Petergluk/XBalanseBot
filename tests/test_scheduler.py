@@ -332,4 +332,29 @@ class TestProcessDemurrage:
             # Проверим, что фонд получил 1.5
             last_execute_args = mock_conn.execute.call_args_list[-1][0]
             assert "UPDATE users SET balance = balance + %s" in last_execute_args[0]
-            assert last_execute_args[1] == (Decimal('1.5'), 0) # Fund ID is 0
+            assert last_execute_args[1] == (Decimal('2'), 0) # Fund ID is 0 (1 + 1 integer Orfs)
+
+
+
+@pytest.mark.asyncio
+async def test_process_scheduled_broadcasts_from_db():
+    """Проверяет выполнение отложенных рассылок из таблицы scheduled_broadcasts в PostgreSQL (STEP-7)."""
+    from app.services.scheduler_jobs import process_scheduled_broadcasts
+    bot_mock = AsyncMock()
+    mock_db = MagicMock()
+    mock_db.claim_due_scheduled_broadcasts = AsyncMock(return_value=[
+        {
+            'id': 77,
+            'activity_id': 1,
+            'source_chat_id': 100,
+            'source_message_id': 200,
+            'admin_chat_id': 300,
+        }
+    ])
+    mock_db.mark_scheduled_broadcast_status = AsyncMock()
+
+    with patch("app.services.scheduler_jobs.db", mock_db), \
+         patch("app.handlers.activity_handlers._do_broadcast", new_callable=AsyncMock) as mock_do_bcast:
+        await process_scheduled_broadcasts(bot_mock)
+        mock_do_bcast.assert_called_once_with(bot_mock, 1, 100, 200, 300)
+        mock_db.mark_scheduled_broadcast_status.assert_called_once_with(77, 'sent')

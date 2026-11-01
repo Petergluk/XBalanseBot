@@ -61,18 +61,18 @@ async def admin_callback_middleware(handler, event: CallbackQuery, data):
 # --- HELPERS ---
 
 async def _parse_user_amount_comment(message: Message) -> tuple | None:
+    from app.utils import validate_amount
     args = message.text.split()
     if len(args) < 3:
         await message.reply(LEXICON_RU["err_admin_format"].format(command=args[0]), parse_mode="HTML")
         return None
     username = args[1].lstrip('@').lower()
     try:
-        amount = Decimal(args[2].replace(',', '.'))
-        if amount <= 0: raise ValueError
-    except (InvalidOperation, ValueError):
+        amount = validate_amount(args[2])
+    except ValueError:
         await message.reply(LEXICON_RU["err_admin_invalid_amount"])
         return None
-    comment = ' '.join(args[3:]) if len(args) > 3 else "Административная операция"
+    comment = ' '.join(args[3:]) if len(args) > 3 else "Операция Игровой казны"
     user = await db.get_user(username=username)
     if not user:
         await message.reply(LEXICON_RU["err_admin_user_not_found"].format(username=username))
@@ -246,9 +246,16 @@ async def cmd_check(message: Message):
     await message.answer(response, parse_mode="HTML")
 
 @router.message(Command("add", ignore_case=True))
-async def cmd_add(message: Message, bot: Bot):
+async def cmd_add(message: Message, bot: Bot, state: FSMContext = None):
+    """Команда /add работает как полный синоним /send со счёта «Игровая казна»."""
+    args = (message.text or "").split()
+    if len(args) == 1 and state is not None and message.chat.type == "private":
+        from app.handlers.user_commands import cmd_send
+        await cmd_send(message, state, bot)
+        return
     parsed = await _parse_user_amount_comment(message)
-    if not parsed: return
+    if not parsed:
+        return
     user, amount, comment = parsed
     await _change_balance(bot, message.from_user, user, amount, comment, 'manual_add')
 
@@ -411,6 +418,28 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         kb = get_topics_settings_keyboard()
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await callback.answer()
+
+    elif action == "menu_bonus_source" or action.startswith("set_bonus_source_"):
+        if action.startswith("set_bonus_source_"):
+            new_mode = action.replace("set_bonus_source_", "")
+            await db.set_setting("bonus_source_mode", new_mode)
+            current_mode = new_mode
+            await callback.answer("✅ Источник бонусов обновлён!")
+        else:
+            current_mode = await db.get_setting("bonus_source_mode", "stepwise")
+            await callback.answer()
+
+        mode_labels = {
+            "treasury": "👑 Сразу из Игровой казны (SUPER_ADMIN_ID)",
+            "monarch": "👑 Сразу из Игровой казны (SUPER_ADMIN_ID)",
+            "fund": "🏛 Только из Общего фонда (id=0)",
+            "stepwise": "🔄 Ступенчато: сначала Общий фонд (id=0), затем Игровая казна",
+        }
+        mode_label = mode_labels.get(current_mode, mode_labels["stepwise"])
+        text = LEXICON_RU["msg_admin_bonus_source_status"].format(mode_label=mode_label)
+        from app.keyboards import get_bonus_source_settings_keyboard
+        kb = get_bonus_source_settings_keyboard(current_mode)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     elif action.startswith("reset_"):
         setting_key = action.replace("reset_", "")

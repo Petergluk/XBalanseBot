@@ -679,25 +679,20 @@ async def handle_broadcast_schedule_input(message: Message, state: FSMContext, s
 
     await state.clear()
 
-    if scheduler:
-        job_id = f"broadcast_{activity_id}_{int(run_dt.timestamp())}"
-        scheduler.add_job(
-            _do_broadcast,
-            trigger='date',
-            run_date=run_dt,
-            args=[message.bot, activity_id, source_chat_id, source_message_id, admin_chat_id],
-            id=job_id,
-            replace_existing=True
-        )
-        dt_str = run_dt.strftime("%d.%m.%Y в %H:%M")
-        logger.info(f"Broadcast scheduled job {job_id} at {dt_str}")
-        await message.answer(
-            LEXICON_RU["msg_broadcast_scheduled"].format(dt_str=dt_str, job_id=job_id),
-            parse_mode="HTML"
-        )
-    else:
-        # Fallback: если scheduler недоступен, отправляем сразу
-        await _do_broadcast(message.bot, activity_id, source_chat_id, source_message_id, admin_chat_id)
+    broadcast_id = await db.create_scheduled_broadcast(
+        activity_id=activity_id,
+        source_chat_id=source_chat_id,
+        source_message_id=source_message_id,
+        admin_chat_id=admin_chat_id,
+        scheduled_at=run_dt,
+    )
+    job_id = f"broadcast_{broadcast_id}"
+    dt_str = run_dt.strftime("%d.%m.%Y в %H:%M")
+    logger.info(f"Broadcast saved to DB with id={broadcast_id} ({job_id}) for {dt_str}")
+    await message.answer(
+        LEXICON_RU["msg_broadcast_scheduled"].format(dt_str=dt_str, job_id=job_id),
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(ActivityAction.filter(F.action == "broadcast_cancel"))

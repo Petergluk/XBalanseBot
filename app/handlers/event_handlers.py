@@ -965,12 +965,18 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
             # 3. Проверяем баланс и кредит повторно (защита от двойного клика)
             if balance >= fee:
                 # Вдруг баланс уже пополнен? Списываем без кредита!
+                from app.config import SUPER_ADMIN_ID
                 await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
                 await conn.execute(
                     "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
                     (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
                 )
                 await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+                if SUPER_ADMIN_ID:
+                    await conn.execute(
+                        "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
+                        (fee, SUPER_ADMIN_ID)
+                    )
                 
                 # Обновляем сообщение в чате
                 next_run_dt = event['event_date'] or datetime.now()
@@ -991,6 +997,7 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
                 return
                 
             # 4. Проводим списание по кредиту доверия
+            from app.config import SUPER_ADMIN_ID
             await conn.execute(
                 "UPDATE users SET balance = balance - %s, grace_credit_used = TRUE WHERE id = %s",
                 (fee, user['id'])
@@ -1000,6 +1007,11 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
                 (user['id'], fund_user_id, fee, f"Оплата за событие (кредит): {event_name}")
             )
             await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+            if SUPER_ADMIN_ID:
+                await conn.execute(
+                    "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
+                    (fee, SUPER_ADMIN_ID)
+                )
             
             # 5. Обновляем сообщение пользователя
             next_run_dt = event['event_date'] or datetime.now()

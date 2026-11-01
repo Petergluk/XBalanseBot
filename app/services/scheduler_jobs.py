@@ -176,12 +176,18 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                 
                 if balance >= fee:
                     # Обычная оплата (быстро внутри БД-транзакции)
+                    from app.config import SUPER_ADMIN_ID
                     await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
                     await conn.execute(
                         "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
                         (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
                     )
                     await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
+                    if SUPER_ADMIN_ID:
+                        await conn.execute(
+                            "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
+                            (fee, SUPER_ADMIN_ID)
+                        )
                     
                     start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
                     notification_text = (
@@ -337,12 +343,13 @@ async def process_demurrage(bot: Bot):
                     if not users_batch:
                         break
                     
+                    from decimal import ROUND_HALF_UP
                     for user in users_batch:
-                        demurrage_amount = (user['balance'] * rate).quantize(Decimal('0.0001'))
                         last_processed_id = user['id']
-                        
-                        if demurrage_amount <= 0: 
+                        if user['balance'] <= 0:
                             continue
+                        raw_cut = (user['balance'] * rate).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+                        demurrage_amount = min(user['balance'], max(Decimal('1'), raw_cut))
                         
                         updates_to_run.append((demurrage_amount, user['id']))
                         inserts_to_run.append((user['id'], fund_user_id, demurrage_amount, "demurrage", comment_text))
@@ -373,3 +380,31 @@ async def process_demurrage(bot: Bot):
             
     except Exception as e:
         logger.error(f"An error occurred during demurrage process. Error: {e}", exc_info=True)
+
+
+
+async def process_scheduled_broadcasts(bot: Bot):
+    """Проверяет и отправляет отложенные рассылки (/broadcast), сохранённые в БД PostgreSQL."""
+    try:
+        now = datetime.now(MOSCOW_TZ)
+        due_broadcasts = await db.claim_due_scheduled_broadcasts(now)
+        if not due_broadcasts:
+            return
+
+        from app.handlers.activity_handlers import _do_broadcast
+        for b in due_broadcasts:
+            try:
+                await _do_broadcast(
+                    bot,
+                    b['activity_id'],
+                    b['source_chat_id'],
+                    b['source_message_id'],
+                    b['admin_chat_id'],
+                )
+                await db.mark_scheduled_broadcast_status(b['id'], 'sent')
+                logger.info(f"Scheduled broadcast #{b['id']} sent successfully.")
+            except Exception as inner_err:
+                logger.error(f"Failed to execute scheduled broadcast #{b['id']}: {inner_err}", exc_info=True)
+                await db.mark_scheduled_broadcast_status(b['id'], 'failed')
+    except Exception as e:
+        logger.error(f"Error in process_scheduled_broadcasts: {e}", exc_info=True)

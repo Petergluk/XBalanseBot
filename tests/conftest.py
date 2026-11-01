@@ -85,6 +85,7 @@ async def db():
     yield test_db
     # Очистка: удаляем тестовые данные (только в xblns_test!)
     async with test_db.pool.connection() as conn:
+        await conn.execute("DELETE FROM scheduled_broadcasts")
         await conn.execute("DELETE FROM offers")
         await conn.execute("DELETE FROM event_registration_overrides")
         await conn.execute("DELETE FROM transactions WHERE id > 0")

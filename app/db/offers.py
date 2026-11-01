@@ -135,8 +135,9 @@ class OfferRepository(BaseRepository):
                     await cur.execute("SELECT * FROM users WHERE id = %s", (seller_id,))
                     seller = await cur.fetchone()
 
+                from app.config import SUPER_ADMIN_ID
                 price = Decimal(str(offer['price']))
-                if buyer['balance'] < price:
+                if buyer['telegram_id'] != SUPER_ADMIN_ID and buyer['balance'] < price:
                     raise ValueError("insufficient_funds")
                 
                 # 6. Обновляем балансы

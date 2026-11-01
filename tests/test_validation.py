@@ -113,3 +113,54 @@ def test_format_transactions_history_includes_purchase_tag_reward_and_fund_payme
     assert "от Фонда (Грант из фонда)" in history_html
     assert "@bob (Покупка товара: &lt;Кабель &amp; Адаптер&gt;)" in history_html
     assert "Мероприятие (Оплата за событие: Киноклуб)" in history_html
+
+
+
+def test_validate_amount_indivisible_integer_orf():
+    """Проверяет, что validate_amount принимает целые орфы и отклоняет дробные значения (STEP-11)."""
+    from app.utils import validate_amount
+    assert validate_amount("1") == Decimal("1")
+    assert validate_amount("250") == Decimal("250")
+    with pytest.raises(ValueError):
+        validate_amount("10.5")
+    with pytest.raises(ValueError):
+        validate_amount("0.1")
+
+
+def test_format_transactions_history_collapses_daily_demurrage():
+    """Проверяет схлопывание ежедневных списаний демерреджа в одну итоговую строку (STEP-9)."""
+    now = datetime(2026, 11, 1, 12, 0)
+    txs = [
+        {
+            "from_user_id": 42,
+            "to_user_id": 0,
+            "amount": Decimal("5"),
+            "type": "demurrage",
+            "comment": "Демерредж 1%",
+            "sender_username": "alice",
+            "recipient_username": "fund",
+            "created_at": now,
+        },
+        {
+            "from_user_id": 42,
+            "to_user_id": 0,
+            "amount": Decimal("4"),
+            "type": "demurrage",
+            "comment": "Демерредж 1%",
+            "sender_username": "alice",
+            "recipient_username": "fund",
+            "created_at": now,
+        },
+        {
+            "from_user_id": 42,
+            "to_user_id": 0,
+            "amount": Decimal("6"),
+            "type": "demurrage",
+            "comment": "Демерредж 1%",
+            "sender_username": "alice",
+            "recipient_username": "fund",
+            "created_at": now,
+        },
+    ]
+    history_html = format_transactions_history(txs, user_db_id=42)
+    assert "📉 Демерредж за 3 дн.: -15" in history_html

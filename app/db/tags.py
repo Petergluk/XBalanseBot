@@ -1,14 +1,16 @@
 # app/db/tags.py
 import logging
 from typing import Any, Dict, List, Optional
+from decimal import Decimal
 from psycopg.rows import dict_row
 from app.config import SYSTEM_FUND_USER_ID
 from app.db.base import BaseRepository
 
 logger = logging.getLogger(__name__)
 
+
 class TagRewardRepository(BaseRepository):
-    """Репозиторий для работы с правилами начисления наград по хэштегам."""
+    """Репозиторий для работы с правилами хэштегов и логами наград."""
 
     async def get_all_tag_rules(self) -> List[Dict[str, Any]]:
         async with self.pool.connection() as conn:
@@ -74,20 +76,22 @@ class TagRewardRepository(BaseRepository):
                 return row[0] if row else 0
 
     async def award_tag_reward(self, telegram_id: int, reward, comment: str):
-        """Начисляет орфы пользователю за хэштег-пост (от фонда, тип manual_add)."""
-        from decimal import Decimal
+        """Начисляет орфы пользователю за хэштег-пост с учётом выбранного источника бонусов."""
         reward = Decimal(str(reward))
         user = await self.get_user(telegram_id=telegram_id)
         if not user:
             return
+        bonus_mode = await self.get_setting('bonus_source_mode', 'stepwise') if hasattr(self, 'get_setting') else 'stepwise'
         async with self.pool.connection() as conn:
             async with conn.transaction():
-                await conn.execute("UPDATE users SET balance = balance + %s WHERE telegram_id = %s", (reward, telegram_id))
-                await conn.execute(
-                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (0, %s, %s, 'tag_reward', %s)",
-                    (user['id'], reward, comment)
+                await self._allocate_bonus_from_source(
+                    conn,
+                    recipient_user_id=user['id'],
+                    amount=reward,
+                    tx_type='tag_reward',
+                    comment=comment,
+                    bonus_mode=bonus_mode,
                 )
-                await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE telegram_id = %s", (telegram_id,))
 
     async def award_tag_reward_once(
         self,
@@ -100,24 +104,23 @@ class TagRewardRepository(BaseRepository):
         limit_period_days: int = 1
     ) -> bool:
         """
-        Атомарно логирует сообщение и начисляет награду только один раз.
-        Возвращает True, если начисление выполнено; False, если сообщение уже обработано.
+        Атомарно логирует сообщение и начисляет награду только один раз
+        с учётом 3-позиционного переключателя источника бонусов (bonus_source_mode).
         """
-        from decimal import Decimal
         reward = Decimal(str(reward))
         user = await self.get_user(telegram_id=user_telegram_id)
         if not user:
             return False
 
+        bonus_mode = await self.get_setting('bonus_source_mode', 'stepwise') if hasattr(self, 'get_setting') else 'stepwise'
+
         async with self.pool.connection() as conn:
             async with conn.transaction():
-                # Блокируем пользователя, чтобы сериализовать награды и избежать гонки за лимитами
                 await conn.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user['id'],))
-                
+
                 if limit_amount > 0:
                     query_params = [user_telegram_id, rule_id]
                     if limit_period_days == 0:
-                        # 0 = за все время
                         date_filter = ""
                     else:
                         date_filter = "AND rewarded_at >= (CURRENT_DATE - %s::interval)"
@@ -144,16 +147,17 @@ class TagRewardRepository(BaseRepository):
                 if not log_row:
                     return False
 
-                await conn.execute(
-                    """UPDATE users
-                       SET balance = balance + %s,
-                           transaction_count = transaction_count + 1,
-                           grace_credit_used = CASE WHEN balance + %s >= 0 THEN FALSE ELSE grace_credit_used END
-                       WHERE telegram_id = %s""",
-                    (reward, reward, user_telegram_id),
+                credited = await self._allocate_bonus_from_source(
+                    conn,
+                    recipient_user_id=user['id'],
+                    amount=reward,
+                    tx_type='tag_reward',
+                    comment=comment,
+                    bonus_mode=bonus_mode,
                 )
-                await conn.execute(
-                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'tag_reward', %s)",
-                    (SYSTEM_FUND_USER_ID, user['id'], reward, comment),
-                )
+                if credited <= 0:
+                    # Если в режиме 'fund' недостаточно средств в Общем фонде, откатываем лог
+                    await conn.execute("DELETE FROM tag_rewards_log WHERE id = %s", (log_row[0],))
+                    return False
+
                 return True

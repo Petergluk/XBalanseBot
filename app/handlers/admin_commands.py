@@ -18,7 +18,7 @@ import logging
 from decimal import Decimal, InvalidOperation
 from html import escape
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, User
 from psycopg.rows import dict_row
@@ -483,7 +483,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
             kb = await get_welcome_bonus_setting_keyboard()
         elif action == "edit_welcome_group":
             from app.keyboards import get_welcome_group_prompt_keyboard
-            enabled = (await db.get_setting('welcome_group_enabled', '0')) == '1'
+            enabled = (await db.get_setting('welcome_group_enabled', '1')) == '1'
             kb = get_welcome_group_prompt_keyboard(enabled, setting_action=action)
         else:
             kb = get_back_to_settings_keyboard(setting_action=action)

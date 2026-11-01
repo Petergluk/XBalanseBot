@@ -311,7 +311,7 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
         logger.warning(f"Could not send welcome DM to {new_member.id}: {e}")
 
     # Проверяем, нужно ли отправлять приветствие в саму группу
-    welcome_group_flag = str(await db.get_setting('welcome_group_enabled', '0')).strip().lower()
+    welcome_group_flag = str(await db.get_setting('welcome_group_enabled', '1')).strip().lower()
     if welcome_group_flag in ('1', 'true', 'yes'):
         try:
             welcome_text_template = await db.get_setting('welcome_message_group', LEXICON_RU["default_welcome_group"])

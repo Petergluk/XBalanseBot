@@ -442,6 +442,12 @@ async def cmd_gdp(message: Message, state: FSMContext = None):
         await state.clear()
     now = datetime.now(ZoneInfo("Europe/Moscow"))
     stats = await db.get_gdp_stats(now)
+    total_mass = stats.get('total_mass', Decimal('0'))
+    if total_mass == 0:
+        sigma_label = "Σ = 0"
+    else:
+        sigma_label = f"Σ = {format_amount(total_mass)} {CURRENCY_SYMBOL} ⚠️ дисбаланс"
+
     response = LEXICON_RU["msg_gdp_stats"].format(
         currency_symbol=CURRENCY_SYMBOL,
         turnover_7d=format_amount(stats['turnover_7d']['turnover']),
@@ -452,7 +458,8 @@ async def cmd_gdp(message: Message, state: FSMContext = None):
         tx_count_all=stats['turnover_all']['tx_count'],
         total_supply=format_amount(stats['total_supply']),
         fund_balance=format_amount(stats['fund_balance']),
-        treasury_balance=format_amount(stats.get('treasury_balance', Decimal('0')))
+        treasury_balance=format_amount(stats.get('treasury_balance', Decimal('0'))),
+        sigma_label=sigma_label
     )
     kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
     await message.answer(response, reply_markup=kb, parse_mode="HTML")

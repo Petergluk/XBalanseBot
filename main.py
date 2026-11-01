@@ -126,7 +126,7 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     "/users", "/check", "/rem", "/make_admin", "/remove_admin",
                     "/list_tag_rules", "/add_tag_rule", "/create_act", "/create_event",
                     "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start",
-                    "/join", "/link", "/offer", "/create_offer", "/reset",
+                    "/join", "/link", "/offer", "/create_offer", "/reset", "/rebalance",
                     "/pay_from_fund", "/fund", "/fund_pay", "/cancel_broadcast", "/status", "/cancel"
                 }
                 

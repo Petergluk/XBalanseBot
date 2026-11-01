@@ -622,7 +622,7 @@ LEXICON_RU: dict[str, str] = {
         "• За 7 дней: {turnover_7d} {currency_symbol} ({tx_count_7d} транзакций)\n"
         "• За 30 дней: {turnover_30d} {currency_symbol} ({tx_count_30d} транзакций)\n"
         "• За все время: {turnover_all} {currency_symbol} ({tx_count_all} транзакций)\n\n"
-        "💰 <b>Денежная масса (Σ = 0):</b>\n"
+        "💰 <b>Денежная масса ({sigma_label}):</b>\n"
         "• В обращении: {total_supply} {currency_symbol}\n"
         "• В Общем фонде (id=0): {fund_balance} {currency_symbol}\n"
         "• Игровая казна: {treasury_balance} {currency_symbol}"

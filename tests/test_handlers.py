@@ -831,19 +831,16 @@ async def test_cmd_gdp_hides_back_button_in_group_and_clears_state():
     import app.handlers.user_commands as uc_mod
     from app.handlers.user_commands import cmd_gdp
 
-    stats = {
-        "total_positive": 500,
-        "treasury_balance": -500,
-        "fund_balance": 50,
-        "active_W": 100,
-        "active_M": 200,
-        "active_Y": 400,
-        "tx_count_W": 3,
-        "tx_count_M": 8,
-        "tx_count_Y": 15,
-        "active_users_count": 5,
+    gdp_stats = {
+        "turnover_7d": {"turnover": Decimal("0"), "tx_count": 0},
+        "turnover_30d": {"turnover": Decimal("0"), "tx_count": 0},
+        "turnover_all": {"turnover": Decimal("0"), "tx_count": 0},
+        "total_supply": Decimal("500"),
+        "fund_balance": Decimal("50"),
+        "treasury_balance": Decimal("-550"),
+        "total_mass": Decimal("0"),
     }
-    with patch.object(uc_mod.db, "get_community_stats", new_callable=AsyncMock, return_value=stats), \
+    with patch.object(uc_mod.db, "get_gdp_stats", new_callable=AsyncMock, return_value=gdp_stats), \
          patch.object(uc_mod.db, "get_setting", new_callable=AsyncMock, return_value="0.01"):
         # Вызов в супергруппе
         group_msg = make_message("/gdp", user_id=101, chat_type="supergroup")
@@ -858,3 +855,115 @@ async def test_cmd_gdp_hides_back_button_in_group_and_clears_state():
         await cmd_gdp(priv_msg, priv_state)
         priv_state.clear.assert_called_once()
         assert priv_msg.answer.call_args.kwargs.get("reply_markup") is not None
+
+
+class TestCmdResetAndRebalance:
+    """Тесты для команд /reset и /rebalance (zero-sum экономика и защита системных аккаунтов)."""
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.admin_commands.db")
+    async def test_cmd_reset_blocks_fund_and_treasury(self, mock_db):
+        """Нельзя сбросить Общий фонд (id=0) или Игровую казну (SUPER_ADMIN_ID)."""
+        from app.handlers.admin_commands import cmd_reset
+        from app.config import SUPER_ADMIN_ID, SYSTEM_FUND_USER_ID
+
+        # 1. Попытка сбросить фонд (id=0)
+        mock_db.get_user = AsyncMock(return_value={"id": SYSTEM_FUND_USER_ID, "telegram_id": 0, "username": "fund", "balance": Decimal("50")})
+        msg_fund = make_message("/reset @fund")
+        await cmd_reset(msg_fund)
+        call_text = msg_fund.reply.call_args[0][0]
+        assert "Нельзя удалить системный аккаунт" in call_text
+
+        # 2. Попытка сбросить суперадмина
+        mock_db.get_user = AsyncMock(return_value={"id": 99, "telegram_id": SUPER_ADMIN_ID, "username": "superadmin", "balance": Decimal("-1000")})
+        msg_admin = make_message(f"/reset {SUPER_ADMIN_ID}")
+        await cmd_reset(msg_admin)
+        call_text = msg_admin.reply.call_args[0][0]
+        assert "Нельзя удалить аккаунт Игровой казны" in call_text
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.admin_commands.db")
+    async def test_cmd_reset_refunds_balance_to_treasury(self, mock_db):
+        """При удалении пользователя его остаток возвращается в Игровую казну."""
+        from app.handlers.admin_commands import cmd_reset
+
+        mock_db.get_user = AsyncMock(return_value={
+            "id": 12,
+            "telegram_id": 999123,
+            "username": "testuser",
+            "balance": Decimal("1485")
+        })
+        mock_db._get_or_create_treasury_id = AsyncMock(return_value=1)
+
+        fake_conn = AsyncMock()
+        fake_conn.execute = AsyncMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(return_value={"balance": Decimal("0")})
+        fake_conn.execute.return_value = mock_cursor
+
+        fake_tx = AsyncMock()
+        fake_tx.__aenter__ = AsyncMock(return_value=fake_tx)
+        fake_tx.__aexit__ = AsyncMock(return_value=None)
+        fake_conn.transaction = MagicMock(return_value=fake_tx)
+
+        fake_pool_conn = AsyncMock()
+        fake_pool_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_pool_conn.__aexit__ = AsyncMock(return_value=None)
+        mock_db.pool.connection = MagicMock(return_value=fake_pool_conn)
+
+        msg = make_message("/reset @testuser")
+        await cmd_reset(msg)
+
+        # Проверяем, что в транзакции был выполнен UPDATE users SET balance = balance + 1485 WHERE id = treasury_id
+        update_calls = [
+            call for call in fake_conn.execute.call_args_list
+            if "UPDATE users SET balance = balance +" in str(call[0][0])
+        ]
+        assert len(update_calls) == 1
+        assert update_calls[0][0][1] == (Decimal("1485"), 1)
+
+        reply_text = msg.reply.call_args[0][0]
+        assert "+1 485" in reply_text
+        assert "возвращён в Игровую казну" in reply_text
+
+    @pytest.mark.asyncio
+    @patch("app.handlers.admin_commands.db")
+    async def test_cmd_rebalance_fixes_disbalance(self, mock_db):
+        """Команда /rebalance выравнивает денежную массу при выявленном дисбалансе."""
+        from app.handlers.admin_commands import cmd_rebalance
+
+        mock_db._get_or_create_treasury_id = AsyncMock(return_value=1)
+
+        fake_conn = AsyncMock()
+        mock_cursor_mass = AsyncMock()
+        # Дисбаланс: общая сумма всех балансов в базе равна -1485
+        mock_cursor_mass.fetchone = AsyncMock(side_effect=[
+            {"total_mass": Decimal("-1485")},
+            {"balance": Decimal("0")},
+        ])
+        fake_conn.execute = AsyncMock(return_value=mock_cursor_mass)
+
+        fake_tx = AsyncMock()
+        fake_tx.__aenter__ = AsyncMock(return_value=fake_tx)
+        fake_tx.__aexit__ = AsyncMock(return_value=None)
+        fake_conn.transaction = MagicMock(return_value=fake_tx)
+
+        fake_pool_conn = AsyncMock()
+        fake_pool_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+        fake_pool_conn.__aexit__ = AsyncMock(return_value=None)
+        mock_db.pool.connection = MagicMock(return_value=fake_pool_conn)
+
+        msg = make_message("/rebalance")
+        await cmd_rebalance(msg)
+
+        # Проверяем, что казна была скорректирована на -(-1485) = +1485
+        update_calls = [
+            call for call in fake_conn.execute.call_args_list
+            if "UPDATE users SET balance = balance -" in str(call[0][0])
+        ]
+        assert len(update_calls) == 1
+        assert update_calls[0][0][1] == (Decimal("-1485"), 1)
+
+        reply_text = msg.reply.call_args[0][0]
+        assert "успешно сбалансирована" in reply_text
+        assert "Σ = 0" in reply_text

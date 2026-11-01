@@ -299,14 +299,29 @@ class TransactionRepository(BaseRepository):
                 turnover_7d = await get_turnover_and_count(7)
                 turnover_30d = await get_turnover_and_count(30)
                 turnover_all = await get_turnover_and_count()
-                await cur.execute("SELECT COALESCE(SUM(balance), 0) as total FROM users WHERE balance > 0")
+
+                # Деньги в обращении: сумма положительных балансов участников (без Фонда и Игровой казны)
+                await cur.execute(
+                    """SELECT COALESCE(SUM(balance), 0) as total
+                       FROM users
+                       WHERE id != 0 AND (telegram_id != %s OR %s IS NULL) AND balance > 0""",
+                    (SUPER_ADMIN_ID, SUPER_ADMIN_ID)
+                )
                 total_supply = (await cur.fetchone())['total']
+
                 await cur.execute("SELECT balance FROM users WHERE id = 0")
                 fund_row = await cur.fetchone()
                 fund_balance = fund_row['balance'] if fund_row else Decimal('0')
+
                 await cur.execute("SELECT balance FROM users WHERE telegram_id = %s", (SUPER_ADMIN_ID,))
                 treasury_row = await cur.fetchone()
                 treasury_balance = treasury_row['balance'] if treasury_row else Decimal('0')
+
+                # Вся денежная масса системы (в замкнутой экономике строго равна 0)
+                await cur.execute("SELECT COALESCE(SUM(balance), 0) as total_mass FROM users")
+                mass_row = await cur.fetchone()
+                total_mass = mass_row['total_mass'] if mass_row else Decimal('0')
+
                 return {
                     'turnover_7d': turnover_7d,
                     'turnover_30d': turnover_30d,
@@ -314,6 +329,7 @@ class TransactionRepository(BaseRepository):
                     'total_supply': total_supply,
                     'fund_balance': fund_balance,
                     'treasury_balance': treasury_balance,
+                    'total_mass': total_mass,
                 }
 
     async def credit_welcome_bonus(self, telegram_id: int, comment: str) -> Any:

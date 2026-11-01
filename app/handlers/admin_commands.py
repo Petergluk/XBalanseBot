@@ -147,33 +147,107 @@ async def cmd_reset(message: Message):
     user_id = user['id']
     telegram_id = user['telegram_id']
     username_str = f"@{user['username']}" if user['username'] else f"ID {telegram_id}"
+
+    from app.config import SUPER_ADMIN_ID, SYSTEM_FUND_USER_ID
+    if user_id == SYSTEM_FUND_USER_ID or user_id == 0:
+        await message.reply("❌ Нельзя удалить системный аккаунт Общего фонда (id=0).", parse_mode="HTML")
+        return
+
+    if telegram_id == SUPER_ADMIN_ID:
+        await message.reply("❌ Нельзя удалить аккаунт Игровой казны (Суперадмина).", parse_mode="HTML")
+        return
+
+    user_balance = Decimal(str(user['balance'] or 0))
+    new_treasury_balance = None
     
     async with db.pool.connection() as conn:
         async with conn.transaction():
-            # 1. Удаляем транзакции пользователя
+            # 1. Возвращаем остаток баланса в Игровую казну, чтобы сохранить нулевую сумму (Σ = 0)
+            treasury_id = await db._get_or_create_treasury_id(conn)
+            if user_id != treasury_id and user_balance != 0:
+                await conn.execute(
+                    "UPDATE users SET balance = balance + %s WHERE id = %s",
+                    (user_balance, treasury_id)
+                )
+
+            cur = await conn.execute("SELECT balance FROM users WHERE id = %s", (treasury_id,))
+            treasury_row = await cur.fetchone()
+            new_treasury_balance = Decimal(str(treasury_row[0] if not isinstance(treasury_row, dict) else treasury_row['balance'])) if treasury_row else Decimal('0')
+
+            # 2. Удаляем транзакции пользователя
             await conn.execute(
                 "DELETE FROM transactions WHERE from_user_id = %s OR to_user_id = %s",
                 (user_id, user_id)
             )
             
-            # 2. Удаляем логи наград по хэштегам
+            # 3. Удаляем логи наград по хэштегам
             await conn.execute(
                 "DELETE FROM tag_rewards_log WHERE user_telegram_id = %s",
                 (telegram_id,)
             )
             
-            # 3. Удаляем самого пользователя (зависимые записи в подписках, оверайдах и офферах удалятся каскадно)
+            # 4. Удаляем самого пользователя (зависимые записи в подписках, оверайдах и офферах удалятся каскадно)
             await conn.execute(
                 "DELETE FROM users WHERE id = %s",
                 (user_id,)
             )
+
+    refund_msg = ""
+    if user_balance > 0:
+        refund_msg = f"- Остаток <b>+{format_amount(user_balance)} {CURRENCY_SYMBOL}</b> возвращён в Игровую казну.\n"
+    elif user_balance < 0:
+        refund_msg = f"- Долг <b>-{format_amount(abs(user_balance))} {CURRENCY_SYMBOL}</b> списан за счёт Игровой казны.\n"
+
+    treasury_info = ""
+    if new_treasury_balance is not None:
+        treasury_info = f"- Баланс Игровой казны: <b>{format_amount(new_treasury_balance)} {CURRENCY_SYMBOL}</b>\n"
             
     await message.reply(
         f"🧹 Пользователь {username_str} полностью удален из базы данных!\n"
+        f"{refund_msg}"
+        f"{treasury_info}"
         f"- Удалены все транзакции с его участием.\n"
         f"- Очищена история наград по хэштегам.\n"
         f"- Каскадно удалены все его подписки на активности, офферы и оверайды.\n\n"
         f"Система полностью забыла этого пользователя. Теперь вы можете протестировать весь процесс с самого начала (отправка команды /start, онбординг, получение ссылки и вступление в группу).",
+        parse_mode="HTML"
+    )
+
+@router.message(Command("rebalance", ignore_case=True))
+async def cmd_rebalance(message: Message):
+    """Балансировка экономики: выравнивает общую денежную массу до Σ = 0 через Игровую казну."""
+    async with db.pool.connection() as conn:
+        async with conn.transaction():
+            treasury_id = await db._get_or_create_treasury_id(conn)
+            cur = await conn.execute("SELECT COALESCE(SUM(balance), 0) as total_mass FROM users")
+            total_mass_row = await cur.fetchone()
+            total_mass = Decimal(str(total_mass_row[0] if not isinstance(total_mass_row, dict) else total_mass_row['total_mass']))
+
+            if total_mass == 0:
+                await message.reply(
+                    f"✅ <b>Дисбаланс не обнаружен!</b>\n\n"
+                    f"Денежная масса сообщества идеально сбалансирована (Σ = 0 {CURRENCY_SYMBOL}).",
+                    parse_mode="HTML"
+                )
+                return
+
+            # Корректируем баланс казны на -total_mass, чтобы компенсировать разницу
+            await conn.execute(
+                "UPDATE users SET balance = balance - %s WHERE id = %s",
+                (total_mass, treasury_id)
+            )
+
+            cur = await conn.execute("SELECT balance FROM users WHERE id = %s", (treasury_id,))
+            treasury_row = await cur.fetchone()
+            new_treasury_balance = Decimal(str(treasury_row[0] if not isinstance(treasury_row, dict) else treasury_row['balance']))
+
+    logger.warning(f"Admin {message.from_user.id} rebalanced community economy: diff={total_mass}, new_treasury={new_treasury_balance}")
+    await message.reply(
+        f"⚖️ <b>Экономика сообщества успешно сбалансирована!</b>\n\n"
+        f"• Выявленный дисбаланс: <b>{format_amount(total_mass)} {CURRENCY_SYMBOL}</b>\n"
+        f"• Корректировка Игровой казны: <b>{format_amount(-total_mass)} {CURRENCY_SYMBOL}</b>\n"
+        f"• Новый баланс Игровой казны: <b>{format_amount(new_treasury_balance)} {CURRENCY_SYMBOL}</b>\n"
+        f"• Текущее состояние денежной массы: <b>Σ = 0 {CURRENCY_SYMBOL}</b>",
         parse_mode="HTML"
     )
 

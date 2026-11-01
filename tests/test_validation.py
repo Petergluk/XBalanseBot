@@ -181,3 +181,19 @@ def test_clean_template_html():
     # Не трогает обычный текст без тегов кода
     normal = 'Привет, {username}! <a href="https://example.com">клик</a>'
     assert _clean_template_html(normal) == normal
+
+
+def test_safe_format_template_preserves_mentions_and_escapes_unsafe_text():
+    """Проверяет сохранение ссылок и mention_html и экранирование спецсимволов HTML."""
+    from app.utils import safe_format_template
+    # Сохранение mention_html
+    tpl = "👋 Привет, {username}! Справка у @{bot_username}"
+    mention = '<a href="tg://user?id=123">Alex</a>'
+    res = safe_format_template(tpl, username=mention, bot_username="XBalanseBot")
+    assert res == '👋 Привет, <a href="tg://user?id=123">Alex</a>! Справка у @XBalanseBot'
+
+    # Экранирование опасных тегов в комментариях и описаниях
+    tpl_comment = "Заметка: {note}"
+    res_comment = safe_format_template(tpl_comment, note="<script>alert('xss')</script> & <b>test</b>")
+    assert res_comment == "Заметка: &lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt; &amp; &lt;b&gt;test&lt;/b&gt;"
+

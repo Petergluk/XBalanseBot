@@ -278,6 +278,11 @@ def safe_format_template(template_str: str, **kwargs) -> str:
     if not template_str:
         return ""
     result = template_str
+    import html as html_module
     for key, val in kwargs.items():
-        result = result.replace(f"{{{key}}}", str(val))
+        val_str = str(val) if val is not None else ""
+        # Не экранируем уже готовые безопасные сущности Telegram и сырой HTML
+        if key not in ("mention", "username", "bot_username", "link", "currency_symbol") and not key.startswith("raw_"):
+            val_str = html_module.escape(val_str)
+        result = result.replace(f"{{{key}}}", val_str)
     return result

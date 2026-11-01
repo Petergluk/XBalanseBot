@@ -15,7 +15,7 @@ class UserRepository(BaseRepository):
                 if telegram_id is not None:
                     await cur.execute("SELECT * FROM users WHERE telegram_id = %s", (telegram_id,))
                 elif username:
-                    await cur.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(%s)", (username.lstrip('@'),))
+                    await cur.execute("SELECT * FROM users WHERE LOWER(username) = LOWER(%s) ORDER BY id DESC LIMIT 1", (username.lstrip('@'),))
                 else:
                     return None
                 return await cur.fetchone()
@@ -35,8 +35,15 @@ class UserRepository(BaseRepository):
                     )
 
     async def update_user_username(self, telegram_id: int, username: str):
+        clean_user = username.lower().lstrip('@')
         async with self.pool.connection() as conn:
-            await conn.execute("UPDATE users SET username = %s WHERE telegram_id = %s", (username.lower(), telegram_id))
+            async with conn.transaction():
+                # Очищаем устаревший username у других записей при смене ника пользователем:
+                await conn.execute(
+                    "UPDATE users SET username = NULL WHERE LOWER(username) = LOWER(%s) AND telegram_id != %s",
+                    (clean_user, telegram_id)
+                )
+                await conn.execute("UPDATE users SET username = %s WHERE telegram_id = %s", (clean_user, telegram_id))
 
     async def set_admin_status(self, telegram_id: int, is_admin: bool):
         async with self.pool.connection() as conn:

@@ -319,7 +319,8 @@ async def main():
         await setup_super_admin()
         await setup_bot_commands(bot)
         await setup_scheduler(bot, scheduler)
-        await bot.delete_webhook(drop_pending_updates=True)
+        # В продакшене не сбрасываем апдейты пользователей при штатном перезапуске:
+        await bot.delete_webhook(drop_pending_updates=DEV_MODE)
 
         # Resolve all update types that the bot handles (includes chat_member)
         allowed_updates = dp.resolve_used_update_types()

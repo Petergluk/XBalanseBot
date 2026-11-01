@@ -23,7 +23,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, User
 from psycopg.rows import dict_row
 
-from app.config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL, SUPER_ADMIN_ID
 from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers import activity_handlers as act_handlers
@@ -395,6 +395,9 @@ async def cmd_fund_pay(message: Message, bot: Bot):
         logger.warning(f"Could not send fund payment notification to user {user['telegram_id']}: {e}")
 
 async def _toggle_admin(message: Message, make_admin: bool):
+    if message.from_user.id != SUPER_ADMIN_ID:
+        await message.reply("⛔️ Только Главный администратор может изменять права администраторов.")
+        return
     args = message.text.split()
     if len(args) < 2:
         await message.reply(LEXICON_RU["err_admin_format_username"].format(command=args[0]))
@@ -403,6 +406,9 @@ async def _toggle_admin(message: Message, make_admin: bool):
     user = await db.get_user(username=username)
     if not user:
         await message.reply(LEXICON_RU["err_admin_user_not_found"].format(username=username))
+        return
+    if user['telegram_id'] == SUPER_ADMIN_ID and not make_admin:
+        await message.reply("⛔️ Нельзя снять права с Главного администратора системы.")
         return
     if user['is_admin'] == make_admin:
         status = "уже является" if make_admin else "не является"

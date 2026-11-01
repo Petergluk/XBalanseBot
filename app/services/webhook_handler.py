@@ -124,14 +124,16 @@ async def handle_tribute_webhook(request: web.Request):
                     raise Exception("User not found during webhook processing")
 
                 user_id = user_row[0]
+                treasury_id = await db._get_or_create_treasury_id(conn)
                 tx_cursor = await conn.execute(
                     """
                     INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment, external_id)
-                    VALUES (0, %s, %s, 'top_up', %s, %s)
+                    VALUES (%s, %s, %s, 'top_up', %s, %s)
                     ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
                     (
+                        treasury_id,
                         user_id,
                         top_up_amount,
                         f"Пополнение через Tribute на {amount_rub} RUB",
@@ -142,6 +144,11 @@ async def handle_tribute_webhook(request: web.Request):
                 if not tx_row:
                     already_processed = True
                 else:
+                    # Списываем средства с Игровой Казны (эмиссия) для соблюдения закона сохранения (Σ = 0)
+                    await conn.execute(
+                        "UPDATE users SET balance = balance - %s WHERE id = %s",
+                        (top_up_amount, treasury_id),
+                    )
                     await conn.execute(
                         "UPDATE users SET balance = balance + %s, transaction_count = transaction_count + 1 WHERE id = %s",
                         (top_up_amount, user_id),
@@ -190,8 +197,31 @@ async def run_webhook_server(bot: Bot, dp: Dispatcher, scheduler=None):
     
     # Регистрация обработчиков
     app.router.add_get('/', health_check)
-    app.router.add_get('/status', dashboard_page_handler)
-    app.router.add_get('/api/status', api_status_handler)
+    
+    # Защищенные обработчики статуса системы
+    from app.config import DASHBOARD_SECRET
+    from secrets import compare_digest
+    
+    async def protected_dashboard_handler(request: web.Request) -> web.Response:
+        if DASHBOARD_SECRET:
+            token = request.query.get('token') or request.headers.get('X-Dashboard-Token')
+            if not token or not compare_digest(token, DASHBOARD_SECRET):
+                return web.Response(
+                    status=401,
+                    text="<h1>401 Unauthorized</h1><p>Access requires ?token=... or X-Dashboard-Token header.</p>",
+                    content_type="text/html"
+                )
+        return await dashboard_page_handler(request)
+
+    async def protected_api_status_handler(request: web.Request) -> web.Response:
+        if DASHBOARD_SECRET:
+            token = request.query.get('token') or request.headers.get('X-Dashboard-Token')
+            if not token or not compare_digest(token, DASHBOARD_SECRET):
+                return web.json_response({"error": "Unauthorized: valid secret token required"}, status=401)
+        return await api_status_handler(request)
+
+    app.router.add_get('/status', protected_dashboard_handler)
+    app.router.add_get('/api/status', protected_api_status_handler)
 
     setup_application(app, dp, bot=bot)
     

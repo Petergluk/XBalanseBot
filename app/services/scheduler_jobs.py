@@ -333,6 +333,8 @@ async def process_demurrage(bot: Bot):
             
             async with db.pool.connection() as conn:
                 async with conn.transaction():
+                    # Блокируем счет Фонда (id = 0) первым, соблюдая строгий восходящий порядок ID и исключая Deadlock:
+                    await conn.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (fund_user_id,))
                     async with conn.cursor(row_factory=dict_row) as cur:
                         await cur.execute(
                             "SELECT id, balance FROM users WHERE balance > 0 AND telegram_id != 0 AND id > %s ORDER BY id LIMIT %s FOR UPDATE",
@@ -349,6 +351,8 @@ async def process_demurrage(bot: Bot):
                         if user['balance'] <= 0:
                             continue
                         raw_cut = (user['balance'] * rate).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+                        # Минимальный срез 1 Ӫ — проектное решение (1 Ӫ ≈ 1 RUB): отключение накопительной функции
+                        # для оставленных микробалансов без использования дробных копеек
                         demurrage_amount = min(user['balance'], max(Decimal('1'), raw_cut))
                         
                         updates_to_run.append((demurrage_amount, user['id']))

@@ -2,6 +2,7 @@
 import logging
 from decimal import Decimal, InvalidOperation
 from typing import Optional
+import html
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -125,6 +126,9 @@ async def process_offer_title(message: Message, state: FSMContext, bot: Bot):
     title = (message.text or "").strip()
     if not title:
         return # Игнорируем пустые сообщения/медиа
+    if title.lower() == "cancel" or title.startswith("/"):
+        await cancel_offer_creation(message, state, bot)
+        return
         
     if len(title) > 120:
         title = title[:117] + "..."
@@ -161,6 +165,9 @@ async def process_offer_desc_skip(callback: CallbackQuery, state: FSMContext, bo
 async def process_offer_desc(message: Message, state: FSMContext, bot: Bot):
     desc = (message.text or "").strip()
     if not desc:
+        return
+    if desc.lower() == "cancel" or desc.startswith("/"):
+        await cancel_offer_creation(message, state, bot)
         return
         
     await state.update_data(description=desc)

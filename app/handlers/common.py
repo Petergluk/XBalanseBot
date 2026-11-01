@@ -30,7 +30,7 @@ from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
 from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers.user_commands import show_main_menu
-from app.utils import ensure_user_exists, format_amount, is_admin, check_is_group_member
+from app.utils import ensure_user_exists, format_amount, is_admin, check_is_group_member, safe_format_template
 from app.callbacks import GeneralAction
 
 router = Router()
@@ -46,8 +46,9 @@ async def cmd_cancel(message: Message, state: FSMContext):
     """Обработчик команды /cancel для выхода из любого диалога."""
     current_state = await state.get_state()
     if current_state is None:
-        from app.handlers.user_commands import show_main_menu
-        await show_main_menu(message)
+        if message.chat.type == 'private':
+            from app.handlers.user_commands import show_main_menu
+            await show_main_menu(message)
         return
 
     logger.info(f"User {message.from_user.id} cancelled state {current_state}")
@@ -62,9 +63,9 @@ async def cmd_cancel(message: Message, state: FSMContext):
     
     await state.clear()
     await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
-    # Показываем главное меню, чтобы пользователь не остался без кнопок
-    from app.handlers.user_commands import show_main_menu
-    await show_main_menu(message)
+    if message.chat.type == 'private':
+        from app.handlers.user_commands import show_main_menu
+        await show_main_menu(message)
 
 @router.callback_query(GeneralAction.filter(F.action == "cancel_dialog"), StateFilter(any_state))
 async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
@@ -89,7 +90,7 @@ async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
 async def send_onboarding_prompt(target: Message | CallbackQuery):
     """Отправляет экран приветствия с правилами и кнопкой «Я согласен с правилами»."""
     welcome_text_template = await db.get_setting('welcome_message_bot', LEXICON_RU["default_welcome_bot"])
-    welcome_text = welcome_text_template.replace('{username}', target.from_user.mention_html())
+    welcome_text = safe_format_template(welcome_text_template, username=target.from_user.mention_html())
 
     from app.keyboards import get_onboarding_keyboard
     if isinstance(target, CallbackQuery) and getattr(target, "message", None) is not None and isinstance(getattr(target, "data", None), str):
@@ -169,8 +170,9 @@ async def send_invite_link(target: Message | CallbackQuery):
     user_id = target.from_user.id
     bot = target.bot
     message_to_edit = target.message if isinstance(target, CallbackQuery) else None
-    
-    reply_markup = get_back_to_menu_keyboard()
+    chat_obj = message_to_edit.chat if message_to_edit else getattr(target, 'chat', None)
+    is_group_chat = getattr(chat_obj, 'type', 'private') in ('group', 'supergroup')
+    reply_markup = None if is_group_chat else get_back_to_menu_keyboard()
     
     # 1. Проверяем, не состоит ли пользователь уже в группе
     is_member = await check_is_group_member(bot, user_id)
@@ -240,6 +242,12 @@ async def process_get_invite_link(callback: CallbackQuery):
 @router.message(Command("join", "link", ignore_case=True))
 async def cmd_join_group(message: Message):
     """Обработчик команд /join и /link для получения ссылки на группу."""
+    from app.config import SUPER_ADMIN_ID
+    user = await db.get_user(telegram_id=message.from_user.id)
+    if not user and message.from_user.id != SUPER_ADMIN_ID:
+        if not await check_is_group_member(message.bot, message.from_user.id):
+            await send_onboarding_prompt(message)
+            return
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     await send_invite_link(message)
 
@@ -256,12 +264,13 @@ async def cmd_help(message: Message):
         help_text = LEXICON_RU["help_group"]
         bot_info = await message.bot.get_me()
         help_text = help_text.format(bot_username=bot_info.username, currency_symbol=CURRENCY_SYMBOL)
+        await message.answer(help_text, parse_mode="HTML")
     else:
         help_text = LEXICON_RU["help_user"].format(currency_symbol=CURRENCY_SYMBOL)
         if await is_admin(message.from_user.id):
             help_text += LEXICON_RU["help_admin_addon"]
-    
-    await message.answer(help_text, parse_mode="HTML")
+        from app.keyboards import get_back_to_menu_keyboard
+        await message.answer(help_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
 
 @router.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated, bot: Bot):
@@ -280,18 +289,17 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
     
     await ensure_user_exists(new_member.id, new_member.username, new_member.is_bot)
     
-    credited = await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")
-    if credited > 0:
-        bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
-        
-        bonus_text = safe_format_template(
-            bonus_text_template,
-            amount=format_amount(credited),
-            currency_symbol=CURRENCY_SYMBOL,
-            username=html.escape(new_member.full_name or new_member.first_name or "Участник")
-        )
-        
-        try:
+    credited = Decimal('0')
+    try:
+        credited = await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")
+        if credited > 0:
+            bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
+            bonus_text = safe_format_template(
+                bonus_text_template,
+                amount=format_amount(credited),
+                currency_symbol=CURRENCY_SYMBOL,
+                username=html.escape(new_member.full_name or new_member.first_name or "Участник")
+            )
             from app.keyboards import get_back_to_menu_keyboard
             await bot.send_message(
                 new_member.id,
@@ -299,15 +307,25 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
                 reply_markup=get_back_to_menu_keyboard(),
                 parse_mode="HTML"
             )
-        except Exception as e:
-            logger.warning(f"Could not send welcome DM to {new_member.id}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not send welcome DM to {new_member.id}: {e}")
 
     # Проверяем, нужно ли отправлять приветствие в саму группу
-    if await db.get_setting('welcome_group_enabled', '0') == '1':
-        welcome_text_template = await db.get_setting('welcome_message_group', LEXICON_RU["default_welcome_group"])
-        bot_info = await bot.get_me()
-        welcome_text = safe_format_template(welcome_text_template, username=new_member.mention_html(), bot_username=bot_info.username)
-        await bot.send_message(event.chat.id, welcome_text, parse_mode="HTML")
+    welcome_group_flag = str(await db.get_setting('welcome_group_enabled', '0')).strip().lower()
+    if welcome_group_flag in ('1', 'true', 'yes'):
+        try:
+            welcome_text_template = await db.get_setting('welcome_message_group', LEXICON_RU["default_welcome_group"])
+            bot_info = await bot.get_me()
+            welcome_text = safe_format_template(
+                welcome_text_template,
+                username=new_member.mention_html(),
+                bot_username=bot_info.username,
+                amount=format_amount(credited),
+                currency_symbol=CURRENCY_SYMBOL,
+            )
+            await bot.send_message(event.chat.id, welcome_text, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Could not send group welcome message in chat {event.chat.id} for user {new_member.id}: {e}")
     else:
         logger.info(f"Processed join for user {new_member.id} silently (group welcome disabled).")
 

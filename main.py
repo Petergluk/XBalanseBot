@@ -125,7 +125,9 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     "/menu", "/balance", "/баланс", "/history", "/settings",
                     "/users", "/check", "/rem", "/make_admin", "/remove_admin",
                     "/list_tag_rules", "/add_tag_rule", "/create_act", "/create_event",
-                    "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start"
+                    "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start",
+                    "/join", "/link", "/offer", "/create_offer", "/reset",
+                    "/pay_from_fund", "/fund", "/fund_pay", "/cancel_broadcast", "/status", "/cancel"
                 }
                 
                 if command in private_commands:
@@ -143,6 +145,24 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     )
                     return
 
+        elif event.chat and event.chat.type == 'private':
+            from_user = getattr(event, 'from_user', None)
+            text_str = (event.text or "").strip()
+            cmd_token = text_str.split()[0].lower().split('@')[0] if text_str.startswith('/') else ""
+            if (
+                from_user
+                and not getattr(from_user, 'is_bot', False)
+                and from_user.id != SUPER_ADMIN_ID
+                and cmd_token != "/start"
+                and getattr(db, 'pool', None) is not None
+            ):
+                user_row = await db.get_user(telegram_id=from_user.id)
+                if not user_row:
+                    from app.utils import check_is_group_member
+                    if not await check_is_group_member(event.bot, from_user.id):
+                        await common.send_onboarding_prompt(event)
+                        return
+
     elif is_callback:
         if event.message and event.message.chat and event.message.chat.type in ('group', 'supergroup'):
             data_str = event.data or ""
@@ -153,6 +173,22 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     show_alert=True
                 )
                 return
+        elif event.message and event.message.chat and event.message.chat.type == 'private':
+            from_user = getattr(event, 'from_user', None)
+            data_str = event.data or ""
+            if (
+                from_user
+                and not getattr(from_user, 'is_bot', False)
+                and from_user.id != SUPER_ADMIN_ID
+                and "onboarding_agree" not in data_str
+                and getattr(db, 'pool', None) is not None
+            ):
+                user_row = await db.get_user(telegram_id=from_user.id)
+                if not user_row:
+                    from app.utils import check_is_group_member
+                    if not await check_is_group_member(event.bot, from_user.id):
+                        await common.send_onboarding_prompt(event)
+                        return
 
     return await handler(event, data)
 
@@ -172,20 +208,41 @@ async def setup_super_admin():
 
 
 async def setup_bot_commands(bot: Bot):
-    """Регистрирует команды бота в меню Telegram."""
-    from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+    """Регистрирует команды бота отдельно для личных чатов и для групп."""
+    from aiogram.types import (
+        BotCommand,
+        BotCommandScopeDefault,
+        BotCommandScopeAllPrivateChats,
+        BotCommandScopeAllGroupChats,
+        BotCommandScopeChat,
+    )
 
-    # Команды для всех пользователей
+    # Команды для личных сообщений с ботом
     user_commands = [
         BotCommand(command="menu", description="🤖 Главное меню"),
-        BotCommand(command="start", description="👋 Начать работу с ботом"),
-        BotCommand(command="help", description="📖 Справка"),
+        BotCommand(command="balance", description="💰 Баланс и выписка"),
+        BotCommand(command="send", description="💸 Перевести орфы"),
+        BotCommand(command="offer", description="🛍 Создать лот на бирже"),
+        BotCommand(command="activity", description="🎨 Активности и подписки"),
+        BotCommand(command="event", description="📅 Календарь событий"),
         BotCommand(command="history", description="📜 История транзакций"),
         BotCommand(command="gdp", description="📊 Экономика сообщества"),
+        BotCommand(command="help", description="📖 Справка"),
         BotCommand(command="cancel", description="❌ Отменить текущее действие"),
     ]
+    # Команды, которые реально работают внутри группового чата
+    group_commands = [
+        BotCommand(command="send", description="💸 Быстрый перевод (@user сумма)"),
+        BotCommand(command="gdp", description="📊 Экономика сообщества"),
+        BotCommand(command="help", description="📖 Справка по командам в группе"),
+    ]
     await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
-    logger.info(f"Bot commands set: {len(user_commands)} user commands.")
+    try:
+        await bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
+        await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    except Exception as e:
+        logger.warning(f"Could not set scoped commands: {e}")
+    logger.info(f"Bot commands set: {len(user_commands)} private commands, {len(group_commands)} group commands.")
 
     # Расширенные команды для супер-админа
     if SUPER_ADMIN_ID:

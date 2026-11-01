@@ -228,7 +228,7 @@ async def cmd_check(message: Message):
         return
     async with db.pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cur:
-            await cur.execute("SELECT t.*, sender.username as sender_username, recipient.username as recipient_username FROM transactions t LEFT JOIN users sender ON t.from_user_id = sender.id LEFT JOIN users recipient ON t.to_user_id = recipient.id WHERE (t.to_user_id = %s OR t.from_user_id = %s) ORDER BY t.created_at DESC LIMIT 10", (user['id'], user['id']))
+            await cur.execute("SELECT t.*, sender.username as sender_username, sender.telegram_id as sender_telegram_id, recipient.username as recipient_username, recipient.telegram_id as recipient_telegram_id FROM transactions t LEFT JOIN users sender ON t.from_user_id = sender.id LEFT JOIN users recipient ON t.to_user_id = recipient.id WHERE (t.to_user_id = %s OR t.from_user_id = %s) ORDER BY t.created_at DESC LIMIT 10", (user['id'], user['id']))
             transactions = await cur.fetchall()
     history_text = LEXICON_RU["msg_admin_no_transactions"]
     if transactions:
@@ -333,8 +333,10 @@ async def cmd_remove_admin(message: Message):
 
 # --- SETTINGS MANAGEMENT ---
 
-@router.message(Command("settings", ignore_case=True))
-async def cmd_settings(message: Message):
+@router.message(Command("settings", ignore_case=True), StateFilter("*"))
+async def cmd_settings(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
     keyboard = await get_settings_keyboard()
     await message.answer(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
 
@@ -596,23 +598,30 @@ async def process_list_subscribers(callback: CallbackQuery, callback_data: Activ
 
 
 @router.message(Command("cancel_broadcast", ignore_case=True))
-async def cmd_cancel_broadcast(message: Message, scheduler: AsyncIOScheduler):
-    """Отменяет запланированную рассылку по ID задачи APScheduler."""
+async def cmd_cancel_broadcast(message: Message, scheduler: AsyncIOScheduler = None):
+    """Отменяет запланированную рассылку по ID задачи в PostgreSQL или APScheduler."""
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
         await message.reply(
-            "❌ Укажите ID задачи.\nФормат: <code>/cancel_broadcast broadcast_2_1234567890</code>",
+            "❌ Укажите ID задачи.\nФормат: <code>/cancel_broadcast broadcast_1</code>",
             parse_mode="HTML"
         )
         return
     job_id = parts[1].strip()
-    job = scheduler.get_job(job_id)
-    if not job:
-        await message.reply(f"❌ Задача <code>{job_id}</code> не найдена. Возможно, она уже выполнилась.", parse_mode="HTML")
+    cancelled = False
+    raw_id = job_id.replace("broadcast_", "")
+    if raw_id.isdigit() and hasattr(db, "cancel_scheduled_broadcast"):
+        cancelled = await db.cancel_scheduled_broadcast(int(raw_id))
+    if not cancelled and scheduler:
+        job = scheduler.get_job(job_id)
+        if job:
+            scheduler.remove_job(job_id)
+            cancelled = True
+    if not cancelled:
+        await message.reply(f"❌ Задача <code>{escape(job_id)}</code> не найдена. Возможно, она уже выполнилась.", parse_mode="HTML")
         return
-    scheduler.remove_job(job_id)
     logger.info(f"Admin {message.from_user.id} cancelled broadcast job {job_id}")
-    await message.reply(f"✅ Рассылка <code>{job_id}</code> отменена.", parse_mode="HTML")
+    await message.reply(f"✅ Рассылка <code>{escape(job_id)}</code> отменена.", parse_mode="HTML")
 
 
 # --- TAG RULE COMMANDS ---
@@ -777,15 +786,13 @@ async def tag_rule_get_reward(message: Message, state: FSMContext):
         await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
         from app.handlers.user_commands import show_main_menu
         return await show_main_menu(message)
-    from decimal import Decimal, InvalidOperation
+    from app.utils import validate_amount
     try:
-        reward = Decimal(msg_text.replace(',', '.'))
-        if reward <= 0:
-            raise ValueError
-    except (InvalidOperation, ValueError):
-        await message.reply("Введите положительное число, например: 100")
+        reward = validate_amount(msg_text)
+    except ValueError:
+        await message.reply("Введите положительное целое число орфов (без копеек), например: 100")
         return
-    await state.update_data(reward=float(reward))
+    await state.update_data(reward=int(reward))
     await state.set_state(TagRuleCreationStates.waiting_for_limit_amount)
     await message.answer(LEXICON_RU["msg_add_tag_rule_limit_amount"], reply_markup=_cancel_keyboard())
 
@@ -841,7 +848,12 @@ async def tag_rule_skip_thread_id(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_thread_id)
 async def tag_rule_get_thread_id(message: Message, state: FSMContext):
-    txt = message.text.strip()
+    txt = (message.text or "").strip()
+    if txt.lower() == "cancel" or txt.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
     if not txt.lstrip('-').isdigit():
         await message.reply("Введите числовой ID топика или нажмите Skip.")
         return
@@ -861,7 +873,13 @@ async def tag_rule_skip_group_msg(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_group_msg)
 async def tag_rule_get_group_msg(message: Message, state: FSMContext):
-    await state.update_data(group_msg=message.text.strip())
+    txt = (message.text or "").strip()
+    if txt.lower() == "cancel" or txt.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    await state.update_data(group_msg=txt)
     await state.set_state(TagRuleCreationStates.waiting_for_bot_msg)
     await message.answer(LEXICON_RU["msg_add_tag_rule_bot_msg"], reply_markup=_skip_keyboard(), parse_mode="HTML")
 
@@ -877,7 +895,13 @@ async def tag_rule_skip_bot_msg(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_bot_msg)
 async def tag_rule_get_bot_msg(message: Message, state: FSMContext):
-    await state.update_data(bot_msg=message.text.strip())
+    txt = (message.text or "").strip()
+    if txt.lower() == "cancel" or txt.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    await state.update_data(bot_msg=txt)
     await state.set_state(TagRuleCreationStates.waiting_for_reaction)
     await message.answer(LEXICON_RU["msg_add_tag_rule_reaction"], reply_markup=_skip_keyboard())
 
@@ -891,7 +915,13 @@ async def tag_rule_skip_reaction(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TagRuleCreationStates.waiting_for_reaction)
 async def tag_rule_get_reaction(message: Message, state: FSMContext):
-    await _finish_tag_rule(message, state, reaction=message.text.strip())
+    txt = (message.text or "").strip()
+    if txt.lower() == "cancel" or txt.startswith('/'):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        return await show_main_menu(message)
+    await _finish_tag_rule(message, state, reaction=txt)
 
 
 async def _finish_tag_rule(message, state: FSMContext, reaction: str):
@@ -911,11 +941,13 @@ async def _finish_tag_rule(message, state: FSMContext, reaction: str):
     from app.handlers.tag_reward_handler import invalidate_tag_rules_cache
     await invalidate_tag_rules_cache()
     logger.info(f"Tag rule #{rule_id} created: #{data['hashtag']} -> {data['reward']}")
+    from app.keyboards import get_back_to_settings_keyboard
     await message.answer(
         LEXICON_RU["msg_tag_rule_created"].format(
             rule_id=rule_id, hashtag=data['hashtag'], reward=data['reward'],
             currency_symbol=CURRENCY_SYMBOL
         ),
+        reply_markup=get_back_to_settings_keyboard(),
         parse_mode="HTML"
     )
 

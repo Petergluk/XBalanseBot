@@ -62,7 +62,9 @@ class ConnectionManager(BaseRepository):
                     'default_reminder_text': LEXICON_RU["default_reminder"],
                     'activities_description': '<b>🎨 Активности сообщества</b>\n\nВыберите направление:',
                     'demurrage_interval_days': '1',
-                    'demurrage_last_run': '1970-01-01'
+                    'demurrage_last_run': '1970-01-01',
+                    'welcome_group_enabled': '1',
+                    'bonus_source_mode': 'stepwise'
                 }
 
                 for key, value in default_settings.items():

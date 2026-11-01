@@ -127,40 +127,9 @@ async def cmd_event(target: Message | CallbackQuery):
 
 @router.callback_query(EventAction.filter(F.action == "view"))
 async def process_event_selection(callback: CallbackQuery, callback_data: EventAction):
-    event_id = callback_data.event_id
-    event = await db.get_event(event_id)
-    if not event:
-        await callback.answer(LEXICON_RU["err_event_not_found"], show_alert=True)
-        return
-
-    event_name = event['name'] or event['activity_name']
-    event_description = event['description'] or event['activity_description']
-
-    schedule_str = LEXICON_RU["msg_event_schedule_not_determined"]
-    if event['event_type'] == 'single' and event['event_date']:
-        schedule_str = LEXICON_RU["msg_event_schedule_single"].format(date_str=event['event_date'].strftime('%d.%m.%Y в %H:%M'), msk_label=MSK_LABEL)
-    elif event['event_type'] == 'recurring' and event['weekday'] is not None and event['event_time'] is not None:
-        next_run = get_next_run_time(
-            event['event_type'], event.get('event_date'),
-            event.get('weekday'), event.get('event_time'),
-            event.get('last_run'),
-            event.get('end_date'),
-        )
-        if next_run:
-            schedule_str = LEXICON_RU["msg_event_schedule_recurring_next"].format(weekdays=format_weekdays(event['weekday']), next_date_str=next_run.strftime('%d.%m.%Y в %H:%M'), msk_label=MSK_LABEL)
-        else:
-            schedule_str = LEXICON_RU["msg_event_schedule_recurring_only"].format(weekdays=format_weekdays(event['weekday']), time_str=event['event_time'].strftime('%H:%M'), msk_label=MSK_LABEL)
-
-    text = LEXICON_RU["msg_event_view_details"].format(
-        event_name=event_name,
-        event_description=event_description,
-        schedule_str=schedule_str,
-        cost=format_amount(event['cost']),
-        currency_symbol=CURRENCY_SYMBOL
-    )
-    keyboard = await get_event_details_keyboard(event_id)
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await callback.answer()
+    """Показывает полноценную интерактивную карточку события (с записью/отменой и кнопками админа)."""
+    from app.handlers.activity_handlers import _view_event_from_activity
+    await _view_event_from_activity(callback, callback_data)
 
 @router.callback_query(GeneralAction.filter(F.action == "back_to_events"))
 async def back_to_events_list(callback: CallbackQuery):
@@ -528,14 +497,7 @@ async def process_event_reminder_text(message: Message, state: FSMContext):
 
 async def show_event_preview(target: Message | CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    message_ids = data.get('message_ids', [])
-    if isinstance(target, Message):
-        message_ids.append(target.message_id)
-        message_to_edit_id = message_ids[-2]
-        chat_id = target.chat.id
-    else: # CallbackQuery
-        message_to_edit_id = target.message.message_id
-        chat_id = target.message.chat.id
+    message_ids = list(data.get('message_ids', []))
 
     activity = await db.get_activity(data['activity_id'])
     
@@ -559,19 +521,25 @@ async def show_event_preview(target: Message | CallbackQuery, state: FSMContext)
     reminder = f"{data['reminder_time']} мин." if data['reminder_time'] > 0 else LEXICON_RU["msg_event_no_reminder"]
 
     preview_text = LEXICON_RU["msg_event_preview_details"].format(
-        name=name,
-        activity_name=activity['name'],
-        description=description,
+        name=html.escape(name or ""),
+        activity_name=html.escape(activity['name'] or ""),
+        description=html.escape(description or ""),
         schedule_str=schedule_str,
         cost=cost,
         currency_symbol=CURRENCY_SYMBOL,
-        link=data['link'],
+        link=html.escape(data['link'] or ""),
         reminder=reminder
     )
 
     await state.set_state(EventCreationStates.waiting_for_confirmation)
     keyboard = get_event_creation_confirmation_keyboard()
-    await target.bot.edit_message_text(preview_text, chat_id=chat_id, message_id=message_to_edit_id, reply_markup=keyboard, parse_mode="HTML")
+    if isinstance(target, Message):
+        message_ids.append(target.message_id)
+        sent = await target.answer(preview_text, reply_markup=keyboard, parse_mode="HTML")
+        message_ids.append(sent.message_id)
+    else:
+        await target.message.edit_text(preview_text, reply_markup=keyboard, parse_mode="HTML")
+        await target.answer()
     await state.update_data(message_ids=message_ids)
 
 @router.callback_query(EventCreationAction.filter(F.action == "confirm_create"), EventCreationStates.waiting_for_confirmation)

@@ -785,3 +785,76 @@ async def test_start_onboarding_bypass_blocked_until_agreed():
 
         mock_ensure.assert_called_once_with(555001, "newcomer", False)
         mock_invite.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_on_user_join_sends_bonus_dm_and_group_welcome():
+    """Проверяет, что при вступлении в группу бот отправляет ЛС о бонусе и приветствие в группу без NameError (DG-001)."""
+    import app.handlers.common as common_mod
+    from app.handlers.common import on_user_join
+
+    fake_event = MagicMock()
+    fake_event.new_chat_member.user.id = 777001
+    fake_event.new_chat_member.user.username = "new_member"
+    fake_event.new_chat_member.user.is_bot = False
+    fake_event.new_chat_member.user.mention_html = MagicMock(return_value="@new_member")
+    fake_event.chat.title = "Племя"
+    fake_event.bot = MagicMock()
+    fake_event.bot.send_message = AsyncMock()
+
+    async def fake_get_setting(key):
+        if key == "welcome_group_enabled":
+            return "1"
+        if key == "welcome_message":
+            return "Добро пожаловать в {group_name}, {username}!"
+        return None
+
+    with patch.object(common_mod, "ensure_user_exists", new_callable=AsyncMock), \
+         patch.object(common_mod, "_credit_welcome_bonus", new_callable=AsyncMock, return_value=100), \
+         patch.object(common_mod.db, "get_setting", side_effect=fake_get_setting), \
+         patch.object(common_mod, "COMMUNITY_GROUP_ID", -100123456789):
+        await on_user_join(fake_event)
+
+        # Должно быть 2 вызова send_message: 1) ЛС пользователю о бонусе, 2) приветствие в группу
+        assert fake_event.bot.send_message.call_count == 2
+        dm_call = fake_event.bot.send_message.call_args_list[0]
+        group_call = fake_event.bot.send_message.call_args_list[1]
+        assert dm_call.args[0] == 777001
+        assert "100" in dm_call.args[1]
+        assert group_call.args[0] == -100123456789
+        assert "Добро пожаловать в Племя, @new_member!" in group_call.args[1]
+
+
+@pytest.mark.asyncio
+async def test_cmd_gdp_hides_back_button_in_group_and_clears_state():
+    """Проверяет, что /gdp в группе НЕ показывает кнопку «Назад в меню», а в ЛС показывает и сбрасывает FSM (DG-002, DG-003)."""
+    import app.handlers.user_commands as uc_mod
+    from app.handlers.user_commands import cmd_gdp
+
+    stats = {
+        "total_positive": 500,
+        "treasury_balance": -500,
+        "fund_balance": 50,
+        "active_W": 100,
+        "active_M": 200,
+        "active_Y": 400,
+        "tx_count_W": 3,
+        "tx_count_M": 8,
+        "tx_count_Y": 15,
+        "active_users_count": 5,
+    }
+    with patch.object(uc_mod.db, "get_community_stats", new_callable=AsyncMock, return_value=stats), \
+         patch.object(uc_mod.db, "get_setting", new_callable=AsyncMock, return_value="0.01"):
+        # Вызов в супергруппе
+        group_msg = make_message("/gdp", user_id=101, chat_type="supergroup")
+        group_state = make_state()
+        await cmd_gdp(group_msg, group_state)
+        group_state.clear.assert_not_called()
+        assert group_msg.answer.call_args.kwargs.get("reply_markup") is None
+
+        # Вызов в личке
+        priv_msg = make_message("/gdp", user_id=101, chat_type="private")
+        priv_state = make_state()
+        await cmd_gdp(priv_msg, priv_state)
+        priv_state.clear.assert_called_once()
+        assert priv_msg.answer.call_args.kwargs.get("reply_markup") is not None

@@ -112,12 +112,16 @@ async def show_main_menu(message: Message | CallbackQuery):
             await message.bot.send_message(message.from_user.id, text, reply_markup=keyboard, parse_mode="HTML")
         await message.answer()
 
-@router.message(Command("menu", ignore_case=True))
-async def cmd_menu(message: Message):
+@router.message(Command("menu", ignore_case=True), StateFilter("*"))
+async def cmd_menu(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
     await show_main_menu(message)
 
-@router.callback_query(GeneralAction.filter(F.action == "main_menu"))
-async def process_back_to_menu(callback: CallbackQuery):
+@router.callback_query(GeneralAction.filter(F.action == "main_menu"), StateFilter("*"))
+async def process_back_to_menu(callback: CallbackQuery, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
     await show_main_menu(callback)
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_balance_history"))
@@ -180,14 +184,17 @@ async def process_menu_send(callback: CallbackQuery, state: FSMContext):
 
 # --- СУЩЕСТВУЮЩИЕ КОМАНДЫ (продолжают работать автономно) ---
 
-@router.message(Command("balance", "баланс", ignore_case=True))
-async def cmd_balance(message: Message):
+@router.message(Command("balance", "баланс", ignore_case=True), StateFilter("*"))
+async def cmd_balance(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     balance = await get_user_balance(message.from_user.id)
     history_text = await _get_history_text(message.from_user.id, days=30)
     
     text = LEXICON_RU["msg_balance_and_history"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL, history_text=history_text)
-    await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+    kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 @router.message(Command("send", ignore_case=True))
 async def cmd_send(message: Message, state: FSMContext, bot: Bot):
@@ -411,8 +418,10 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
         logger.error(f"Transaction failed between users {sender.id} -> {recipient['telegram_id']}: {e}", exc_info=True)
         await bot.send_message(chat_id, LEXICON_RU["err_transfer_failed"])
 
-@router.message(Command("history", ignore_case=True))
-async def cmd_history(message: Message):
+@router.message(Command("history", ignore_case=True), StateFilter("*"))
+async def cmd_history(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
     user = message.from_user
     await ensure_user_exists(user.id, user.username, user.is_bot)
     args = message.text.split()
@@ -422,12 +431,15 @@ async def cmd_history(message: Message):
         days = 30
     
     history_text = await _get_history_text(user.id, days=days)
-    await message.answer(history_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+    kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
+    await message.answer(history_text, reply_markup=kb, parse_mode="HTML")
 
 
 
-@router.message(Command("gdp", "ввп", ignore_case=True))
-async def cmd_gdp(message: Message):
+@router.message(Command("gdp", "ввп", ignore_case=True), StateFilter("*"))
+async def cmd_gdp(message: Message, state: FSMContext = None):
+    if state is not None and getattr(message.chat, 'type', 'private') == 'private':
+        await state.clear()
     now = datetime.now(ZoneInfo("Europe/Moscow"))
     stats = await db.get_gdp_stats(now)
     response = LEXICON_RU["msg_gdp_stats"].format(
@@ -442,4 +454,5 @@ async def cmd_gdp(message: Message):
         fund_balance=format_amount(stats['fund_balance']),
         treasury_balance=format_amount(stats.get('treasury_balance', Decimal('0')))
     )
-    await message.answer(response, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+    kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
+    await message.answer(response, reply_markup=kb, parse_mode="HTML")

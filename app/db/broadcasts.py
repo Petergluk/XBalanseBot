@@ -61,3 +61,14 @@ class BroadcastRepository(BaseRepository):
                 "UPDATE scheduled_broadcasts SET status = %s WHERE id = %s",
                 (status, broadcast_id),
             )
+
+    async def cancel_scheduled_broadcast(self, broadcast_id: int) -> bool:
+        """Отменяет ожидающую рассылку (status='pending') по её ID."""
+        async with self.pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE scheduled_broadcasts SET status = 'cancelled' WHERE id = %s AND status = 'pending' RETURNING id",
+                    (broadcast_id,),
+                )
+                row = await cur.fetchone()
+                return bool(row)

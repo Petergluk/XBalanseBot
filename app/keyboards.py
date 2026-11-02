@@ -53,10 +53,10 @@ def get_main_menu_keyboard(is_member: bool = False, invite_link: str | None = No
     )
     if not is_member:
         if invite_link:
-            builder.row(InlineKeyboardButton(text="🚀 Вступить в группу", url=invite_link))
+            builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_join_group"], url=invite_link))
         else:
             builder.row(
-                InlineKeyboardButton(text="👥 Войти в группу", callback_data=GeneralAction(action="get_invite_link").pack())
+                InlineKeyboardButton(text=LEXICON_RU["btn_enter_group"], callback_data=GeneralAction(action="get_invite_link").pack())
             )
     return builder.as_markup()
 

@@ -88,6 +88,7 @@ WEBHOOK_HOST = os.environ.get("WEBHOOK_HOST")
 
 # Переключатель режимов. По умолчанию - серверный (False).
 DEV_MODE = os.environ.get("DEV_MODE", "False").lower() in ('true', '1', 't')
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 # --- Системные константы ---
 GENERAL_ACTIVITY_ID = 1

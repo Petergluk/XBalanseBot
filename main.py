@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 import subprocess
 from datetime import datetime
 from dotenv import load_dotenv
@@ -41,7 +42,7 @@ from apscheduler.triggers.cron import CronTrigger
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, REDIS_HOST, REDIS_URL, WEBHOOK_SECRET_TOKEN
+from app.config import BOT_TOKEN, SUPER_ADMIN_ID, DEV_MODE, LOG_LEVEL, REDIS_HOST, REDIS_URL, WEBHOOK_SECRET_TOKEN
 from app.database import db
 from app.handlers import common, user_commands, admin_commands, activity_handlers, event_handlers, tag_reward_handler, offer_handlers
 from app.services import scheduler_jobs
@@ -49,21 +50,35 @@ from app.services.webhook_handler import run_webhook_server
 from app import callbacks # Импорт нового модуля callbacks
 
 # --- Logging setup ---
-log_dir = "data/logs"
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
+def cleanup_old_logs(log_dir: str = "data/logs", retention_days: int = 7) -> int:
+    """Автоматически удаляет накопленные файлы логов старше retention_days дней при запуске."""
+    if not os.path.exists(log_dir):
+        return 0
+    cutoff = time.time() - (retention_days * 86400)
+    removed = 0
+    try:
+        for fname in os.listdir(log_dir):
+            if fname.startswith("bot_") and fname.endswith(".log"):
+                fpath = os.path.join(log_dir, fname)
+                if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+                    os.remove(fpath)
+                    removed += 1
+    except Exception:
+        pass
+    return removed
 
-log_filename = os.path.join(log_dir, f"bot_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log")
+_removed_logs_count = cleanup_old_logs("data/logs", retention_days=7)
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_filename, encoding='utf-8'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
+if _removed_logs_count > 0:
+    logger.info(f"Cleaned up {_removed_logs_count} old log file(s) (>7 days) from data/logs.")
 
 
 async def logging_middleware(handler, event, data: dict):

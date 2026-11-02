@@ -137,14 +137,10 @@ async def cmd_test(message: Message):
 
 @router.message(Command("reset", ignore_case=True))
 async def cmd_reset(message: Message):
-    """Полное удаление пользователя из базы данных для тестирования с нуля."""
+    """Полное удаление пользователя из базы данных и возврат баланса в Игровую казну."""
     args = message.text.split()
     if len(args) < 2:
-        await message.reply(
-            "❌ Укажите username или Telegram ID пользователя:\n"
-            "<code>/reset @username</code> или <code>/reset 123456789</code>",
-            parse_mode="HTML"
-        )
+        await message.reply(LEXICON_RU["err_admin_reset_format"], parse_mode="HTML")
         return
     
     target_arg = args[1]
@@ -156,7 +152,7 @@ async def cmd_reset(message: Message):
         user = await db.get_user(username=username)
         
     if not user:
-        await message.reply(f"❌ Пользователь <b>{target_arg}</b> не найден в базе данных.", parse_mode="HTML")
+        await message.reply(LEXICON_RU["err_admin_reset_not_found"].format(target=escape(target_arg)), parse_mode="HTML")
         return
 
     user_id = user['id']
@@ -165,11 +161,11 @@ async def cmd_reset(message: Message):
 
     from app.config import SUPER_ADMIN_ID, SYSTEM_FUND_USER_ID
     if user_id == SYSTEM_FUND_USER_ID or user_id == 0:
-        await message.reply("❌ Нельзя удалить системный аккаунт Общего фонда (id=0).", parse_mode="HTML")
+        await message.reply(LEXICON_RU["err_admin_reset_fund"], parse_mode="HTML")
         return
 
     if telegram_id == SUPER_ADMIN_ID:
-        await message.reply("❌ Нельзя удалить аккаунт Игровой казны (Суперадмина).", parse_mode="HTML")
+        await message.reply(LEXICON_RU["err_admin_reset_treasury"], parse_mode="HTML")
         return
 
     user_balance = Decimal(str(user['balance'] or 0))
@@ -209,22 +205,29 @@ async def cmd_reset(message: Message):
 
     refund_msg = ""
     if user_balance > 0:
-        refund_msg = f"- Остаток <b>+{format_amount(user_balance)} {CURRENCY_SYMBOL}</b> возвращён в Игровую казну.\n"
+        refund_msg = LEXICON_RU["msg_admin_reset_refund_pos"].format(
+            amount=format_amount(user_balance),
+            currency_symbol=CURRENCY_SYMBOL
+        )
     elif user_balance < 0:
-        refund_msg = f"- Долг <b>-{format_amount(abs(user_balance))} {CURRENCY_SYMBOL}</b> списан за счёт Игровой казны.\n"
+        refund_msg = LEXICON_RU["msg_admin_reset_refund_neg"].format(
+            amount=format_amount(abs(user_balance)),
+            currency_symbol=CURRENCY_SYMBOL
+        )
 
     treasury_info = ""
     if new_treasury_balance is not None:
-        treasury_info = f"- Баланс Игровой казны: <b>{format_amount(new_treasury_balance)} {CURRENCY_SYMBOL}</b>\n"
+        treasury_info = LEXICON_RU["msg_admin_reset_treasury_info"].format(
+            balance=format_amount(new_treasury_balance),
+            currency_symbol=CURRENCY_SYMBOL
+        )
             
     await message.reply(
-        f"🧹 Пользователь {username_str} полностью удален из базы данных!\n"
-        f"{refund_msg}"
-        f"{treasury_info}"
-        f"- Удалены все транзакции с его участием.\n"
-        f"- Очищена история наград по хэштегам.\n"
-        f"- Каскадно удалены все его подписки на активности, офферы и оверайды.\n\n"
-        f"Система полностью забыла этого пользователя. Теперь вы можете протестировать весь процесс с самого начала (отправка команды /start, онбординг, получение ссылки и вступление в группу).",
+        LEXICON_RU["msg_admin_reset_success"].format(
+            username_str=username_str,
+            refund_msg=refund_msg,
+            treasury_info=treasury_info
+        ),
         parse_mode="HTML"
     )
 
@@ -240,8 +243,7 @@ async def cmd_rebalance(message: Message):
 
             if total_mass == 0:
                 await message.reply(
-                    f"✅ <b>Дисбаланс не обнаружен!</b>\n\n"
-                    f"Денежная масса сообщества идеально сбалансирована (Σ = 0 {CURRENCY_SYMBOL}).",
+                    LEXICON_RU["msg_admin_rebalance_already_zero"].format(currency_symbol=CURRENCY_SYMBOL),
                     parse_mode="HTML"
                 )
                 return
@@ -258,11 +260,12 @@ async def cmd_rebalance(message: Message):
 
     logger.warning(f"Admin {message.from_user.id} rebalanced community economy: diff={total_mass}, new_treasury={new_treasury_balance}")
     await message.reply(
-        f"⚖️ <b>Экономика сообщества успешно сбалансирована!</b>\n\n"
-        f"• Выявленный дисбаланс: <b>{format_amount(total_mass)} {CURRENCY_SYMBOL}</b>\n"
-        f"• Корректировка Игровой казны: <b>{format_amount(-total_mass)} {CURRENCY_SYMBOL}</b>\n"
-        f"• Новый баланс Игровой казны: <b>{format_amount(new_treasury_balance)} {CURRENCY_SYMBOL}</b>\n"
-        f"• Текущее состояние денежной массы: <b>Σ = 0 {CURRENCY_SYMBOL}</b>",
+        LEXICON_RU["msg_admin_rebalance_success"].format(
+            total_mass=format_amount(total_mass),
+            correction=format_amount(-total_mass),
+            new_treasury_balance=format_amount(new_treasury_balance),
+            currency_symbol=CURRENCY_SYMBOL
+        ),
         parse_mode="HTML"
     )
 
@@ -363,14 +366,16 @@ async def cmd_fund_pay(message: Message, bot: Bot):
         return
     user, amount, comment = parsed
     if user['id'] == 0:
-        await message.reply("❌ Нельзя перевести средства из Фонда самому Фонду.")
+        await message.reply(LEXICON_RU["err_admin_fund_to_self"])
         return
 
     res = await db.transfer_from_fund(user['id'], amount, comment)
     if not res['success']:
         await message.reply(
-            f"❌ В Фонде недостаточно средств для перевода.\n"
-            f"Доступно в Фонде: <b>{format_amount(res['fund_balance'])} {CURRENCY_SYMBOL}</b>",
+            LEXICON_RU["err_admin_fund_insufficient"].format(
+                fund_balance=format_amount(res['fund_balance']),
+                currency_symbol=CURRENCY_SYMBOL
+            ),
             parse_mode="HTML"
         )
         return
@@ -379,16 +384,22 @@ async def cmd_fund_pay(message: Message, bot: Bot):
         f"Admin {message.from_user.id} transferred {amount} from Fund to user {user['telegram_id']} (@{user['username']}). Comment: {comment}"
     )
     await message.reply(
-        f"✅ Из Фонда переведено <b>{format_amount(amount)} {CURRENCY_SYMBOL}</b> пользователю @{escape(user['username'] or str(user['telegram_id']))}.\n"
-        f"🏛 Остаток в Фонде: <b>{format_amount(res['new_fund_balance'])} {CURRENCY_SYMBOL}</b>",
+        LEXICON_RU["msg_admin_fund_pay_success"].format(
+            amount=format_amount(amount),
+            currency_symbol=CURRENCY_SYMBOL,
+            username=escape(user['username'] or str(user['telegram_id'])),
+            new_fund_balance=format_amount(res['new_fund_balance'])
+        ),
         parse_mode="HTML"
     )
     try:
         await bot.send_message(
             user['telegram_id'],
-            f"🏛 Вам поступил перевод из <b>Фонда сообщества</b>!\n\n"
-            f"<b>Сумма:</b> {format_amount(amount)} {CURRENCY_SYMBOL}\n"
-            f"<b>Комментарий:</b> {escape(comment or '')}",
+            LEXICON_RU["msg_user_fund_pay_received"].format(
+                amount=format_amount(amount),
+                currency_symbol=CURRENCY_SYMBOL,
+                comment=escape(comment or '')
+            ),
             parse_mode="HTML"
         )
     except Exception as e:
@@ -396,7 +407,7 @@ async def cmd_fund_pay(message: Message, bot: Bot):
 
 async def _toggle_admin(message: Message, make_admin: bool):
     if message.from_user.id != SUPER_ADMIN_ID:
-        await message.reply("⛔️ Только Главный администратор может изменять права администраторов.")
+        await message.reply(LEXICON_RU["err_admin_only_super"])
         return
     args = message.text.split()
     if len(args) < 2:
@@ -408,7 +419,7 @@ async def _toggle_admin(message: Message, make_admin: bool):
         await message.reply(LEXICON_RU["err_admin_user_not_found"].format(username=username))
         return
     if user['telegram_id'] == SUPER_ADMIN_ID and not make_admin:
-        await message.reply("⛔️ Нельзя снять права с Главного администратора системы.")
+        await message.reply(LEXICON_RU["err_admin_cannot_demote_super"])
         return
     if user['is_admin'] == make_admin:
         status = "уже является" if make_admin else "не является"

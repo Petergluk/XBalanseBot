@@ -114,20 +114,20 @@ async def show_main_menu(message: Message | CallbackQuery):
             items = []
             for o in commitments["owed_by_me"]:
                 buyer = f"@{o['buyer_username']}" if o.get("buyer_username") else "покупателю"
-                items.append(f"  • «{escape(o['title'])}» для {buyer}")
+                items.append(LEXICON_RU["msg_dashboard_owed_by_me_item"].format(title=escape(o["title"]), buyer=buyer))
             nl = chr(10)
-            deals_blocks.append(f"📤 <b>Вы должны передать:</b>{nl}" + nl.join(items))
+            deals_blocks.append(LEXICON_RU["msg_dashboard_owed_by_me_header"] + nl + nl.join(items))
 
         if commitments.get("owed_to_me"):
             items = []
             for o in commitments["owed_to_me"]:
                 seller = f"@{o['seller_username']}" if o.get("seller_username") else "продавца"
-                items.append(f"  • «{escape(o['title'])}» от {seller}")
+                items.append(LEXICON_RU["msg_dashboard_owed_to_me_item"].format(title=escape(o["title"]), seller=seller))
             nl = chr(10)
-            deals_blocks.append(f"📥 <b>Вам должны предоставить:</b>{nl}" + nl.join(items))
+            deals_blocks.append(LEXICON_RU["msg_dashboard_owed_to_me_header"] + nl + nl.join(items))
 
         if commitments.get("active_selling_count", 0) > 0:
-            deals_blocks.append(f"🏷 Активных лотов на бирже: <b>{commitments['active_selling_count']}</b>")
+            deals_blocks.append(LEXICON_RU["msg_dashboard_active_offers"].format(count=commitments["active_selling_count"]))
 
         if deals_blocks:
             nl2 = chr(10) + chr(10)
@@ -155,17 +155,20 @@ async def show_main_menu(message: Message | CallbackQuery):
         if dated:
             dated.sort(key=lambda x: x[0])
             next_time, next_ev = dated[0]
-            nl = chr(10)
-            upcoming_event_str = f"{nl}📅 <b>Ближайшее событие:</b> {escape(next_ev['name'])} ({next_time.strftime('%d.%m %H:%M')} MSK)"
+            upcoming_event_str = LEXICON_RU["msg_dashboard_upcoming_event"].format(
+                event_name=escape(next_ev["name"]),
+                event_time=next_time.strftime("%d.%m %H:%M")
+            )
     except Exception as e:
         logger.debug(f"Could not load upcoming events for dashboard: {e}")
 
-    nl = chr(10)
-    text = (
-        f"👤 <b>{escape(name)}</b>{username_part}{nl}"
-        f"💰 Баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>"
-        f"{upcoming_event_str}"
-        f"{commitments_str}"
+    text = LEXICON_RU["msg_main_menu"].format(
+        name=escape(name),
+        username_part=username_part,
+        balance=format_amount(balance),
+        currency_symbol=CURRENCY_SYMBOL,
+        upcoming_event_str=upcoming_event_str,
+        commitments_str=commitments_str
     )
 
     # Инвайт-ссылка для кнопки перехода в группу (если ещё не в группе)

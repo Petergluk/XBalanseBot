@@ -95,7 +95,7 @@ LEXICON_RU: dict[str, str] = {
         "/add @username сумма [комментарий] — Начислить {currency_symbol} (эмиссия)\n"
         "/rem @username сумма [комментарий] — Списать {currency_symbol}\n"
         "/pay_from_fund @username сумма [комментарий] (или <code>/fund</code>) — Выплатить {currency_symbol} участнику из Фонда сообщества\n"
-        "/reset @username — Полный сброс данных пользователя для тестирования\n\n"
+        "/reset @username — Полное удаление пользователя из базы и возврат баланса в казну\n\n"
         "<b>⚙️ Управление системой и диагностика:</b>\n"
         "/settings - Открыть меню настроек (демерредж, бонусы, курс, шаблоны)\n"
         "/status - Статус инфраструктуры (Koyeb, Supabase, Upstash, Telegram)\n\n"
@@ -179,7 +179,7 @@ LEXICON_RU: dict[str, str] = {
         "/users — Список всех пользователей (с пагинацией)\n"
         "<code>/make_admin @petropolyten</code> — Назначить администратора\n"
         "<code>/remove_admin @petropolyten</code> — Снять права администратора\n"
-        "<code>/reset @petropolyten</code> — Полный сброс пользователя для повторного теста онбординга\n\n"
+        "<code>/reset @petropolyten</code> — Полное удаление пользователя из базы и возврат баланса в казну\n\n"
         "<b>6. Руководства и отмена:</b>\n"
         "/gide — Подробное руководство администратора\n"
         "/test — Эта памятка команд\n"
@@ -211,6 +211,8 @@ LEXICON_RU: dict[str, str] = {
     
     # === Клавиатура онбординга ===
     "btn_onboarding_agree": "✅ Согласен",
+    "btn_join_group": "🚀 Вступить в группу",
+    "btn_enter_group": "👥 Войти в группу",
     
     # === Общие кнопки ===
     "btn_back_to_menu": "⬅️ Назад в меню",
@@ -569,29 +571,38 @@ LEXICON_RU: dict[str, str] = {
     "msg_history_header": "📊 <b>История транзакций за последние {days} дней:</b>",
     "msg_current_balance": "\n💰 <b>Текущий баланс:</b> {balance} {currency_symbol}",
     "msg_main_menu": (
-        "🤖 <b>Главное меню</b>\n"
-        "💰 Ваш баланс: <b>{balance} {currency_symbol}</b>\n\n"
-        "Выберите действие:"
+        "👤 <b>{name}</b>{username_part}\n"
+        "💰 Баланс: <b>{balance} {currency_symbol}</b>"
+        "{upcoming_event_str}"
+        "{commitments_str}"
     ),
+    "msg_dashboard_upcoming_event": "\n📅 <b>Ближайшее событие:</b> {event_name} ({event_time} MSK)",
+    "msg_dashboard_owed_by_me_header": "📤 <b>Вы должны передать:</b>",
+    "msg_dashboard_owed_by_me_item": "  • «{title}» для {buyer}",
+    "msg_dashboard_owed_to_me_header": "📥 <b>Вам должны предоставить:</b>",
+    "msg_dashboard_owed_to_me_item": "  • «{title}» от {seller}",
+    "msg_dashboard_active_offers": "🏷 Активных лотов на бирже: <b>{count}</b>",
+    "msg_already_group_member": "✅ Вы уже являетесь участником группы!",
+    "msg_invite_link_ready": "🎉 <b>Ваша персональная ссылка для вступления в группу готова!</b>", 
     "msg_balance_and_history": (
         "💰 Ваш баланс: <b>{balance} {currency_symbol}</b>\n\n"
         "{history_text}"
     ),
 
     # === Переводы ===
-    "msg_transfer_ask_recipient": "Кому вы хотите сделать перевод? Укажите @username получателя.\n\nДля отмены введите /cancel",
+    "msg_transfer_ask_recipient": "Кому вы хотите сделать перевод? Укажите @username получателя.",
     "err_transfer_self": "❌ Нельзя отправить средства самому себе.",
     "err_transfer_self_dialog": "❌ Нельзя отправить средства самому себе. Укажите другой @username.",
     "err_transfer_invalid_amount": "❌ Неверная сумма. Пожалуйста, укажите положительное число.",
-    "err_transfer_invalid_amount_dialog": "❌ Сумма должна быть положительным числом. Попробуйте еще раз.\n\nДля отмены введите /cancel",
+    "err_transfer_invalid_amount_dialog": "❌ Сумма должна быть положительным числом. Попробуйте еще раз.",
     "err_user_not_found": "❌ Пользователь @{recipient_username} не найден или не является участником группы.",
-    "err_user_not_found_dialog": "❌ Пользователь @{recipient_username} не найден или не является участником группы. Попробуйте еще раз.\n\nДля отмены введите /cancel",
+    "err_user_not_found_dialog": "❌ Пользователь @{recipient_username} не найден или не является участником группы. Попробуйте еще раз.",
     "err_transfer_format": "❌ Неверный формат. Используйте:\n<code>/send @username сумма [комментарий]</code>\nили просто <code>/send</code> для запуска диалога.",
-    "msg_transfer_ask_amount": "Отлично. Какую сумму в {currency_symbol} вы хотите перевести @{recipient_username}?\n\nДля отмены введите /cancel",
-    "err_insufficient_funds": "❌ Недостаточно средств. Ваш баланс: <b>{balance} {currency_symbol}</b>. Введите другую сумму.\n\nДля отмены введите /cancel",
+    "msg_transfer_ask_amount": "Отлично. Какую сумму в {currency_symbol} вы хотите перевести @{recipient_username}?",
+    "err_insufficient_funds": "❌ Недостаточно средств. Ваш баланс: <b>{balance} {currency_symbol}</b>. Введите другую сумму.",
     "err_insufficient_funds_plain": "❌ Недостаточно средств. Ваш баланс: <b>{balance} {currency_symbol}</b>",
     "err_sender_not_found": "❌ Ваш профиль не найден в системе.",
-    "msg_transfer_ask_comment": "Теперь добавьте короткий комментарий к переводу (например, 'За кофе').\n\nДля отмены введите /cancel",
+    "msg_transfer_ask_comment": "Теперь добавьте короткий комментарий к переводу (например, 'За кофе').",
     "msg_transfer_confirm": (
         "Пожалуйста, проверьте детали перевода:\n\n"
         "➡️ <b>Получатель:</b> @{recipient_username}\n"
@@ -782,4 +793,51 @@ LEXICON_RU: dict[str, str] = {
     
     "msg_event_grace_credit_used": "\n\n⚠️ <b>Внимание:</b> У вас было недостаточно средств для оплаты этого события. Вам предоставлен разовый кредит доверия из фонда. Ваш баланс ушел в минус. Пожалуйста, пополните счет, чтобы иметь возможность участвовать в следующих событиях.",
     "msg_event_payment_failed_no_credit": "❌ <b>Участие в событии «{event_name}» приостановлено.</b>\nУ вас недостаточно средств для участия (стоимость: {cost} {currency_symbol}), а лимит кредита доверия уже исчерпан. Пожалуйста, пополните ваш баланс для возонивления участия.",
+
+    # === Системные и административные команды (/reset, /rebalance, /pay_from_fund) ===
+    "err_admin_reset_format": (
+        "❌ Укажите username или Telegram ID пользователя:\n"
+        "<code>/reset @username</code> или <code>/reset 123456789</code>"
+    ),
+    "err_admin_reset_not_found": "❌ Пользователь <b>{target}</b> не найден в базе данных.",
+    "err_admin_reset_fund": "❌ Нельзя удалить системный аккаунт Общего фонда (id=0).",
+    "err_admin_reset_treasury": "❌ Нельзя удалить аккаунт Игровой казны (Суперадмина).",
+    "msg_admin_reset_refund_pos": "- Остаток <b>+{amount} {currency_symbol}</b> возвращён в Игровую казну.\n",
+    "msg_admin_reset_refund_neg": "- Долг <b>-{amount} {currency_symbol}</b> списан за счёт Игровой казны.\n",
+    "msg_admin_reset_treasury_info": "- Баланс Игровой казны: <b>{balance} {currency_symbol}</b>\n",
+    "msg_admin_reset_success": (
+        "🧹 Пользователь {username_str} полностью удален из базы данных!\n"
+        "{refund_msg}"
+        "{treasury_info}"
+        "- Удалены все транзакции с его участием.\n"
+        "- Очищена история наград по хэштегам.\n"
+        "- Каскадно удалены все его подписки на активности, офферы и оверайды."
+    ),
+    "msg_admin_rebalance_already_zero": (
+        "✅ <b>Дисбаланс не обнаружен!</b>\n\n"
+        "Денежная масса сообщества идеально сбалансирована (Σ = 0 {currency_symbol})."
+    ),
+    "msg_admin_rebalance_success": (
+        "⚖️ <b>Экономика сообщества успешно сбалансирована!</b>\n\n"
+        "• Выявленный дисбаланс: <b>{total_mass} {currency_symbol}</b>\n"
+        "• Корректировка Игровой казны: <b>{correction} {currency_symbol}</b>\n"
+        "• Новый баланс Игровой казны: <b>{new_treasury_balance} {currency_symbol}</b>\n"
+        "• Текущее состояние денежной массы: <b>Σ = 0 {currency_symbol}</b>"
+    ),
+    "err_admin_fund_to_self": "❌ Нельзя перевести средства из Фонда самому Фонду.",
+    "err_admin_fund_insufficient": (
+        "❌ В Фонде недостаточно средств для перевода.\n"
+        "Доступно в Фонде: <b>{fund_balance} {currency_symbol}</b>"
+    ),
+    "msg_admin_fund_pay_success": (
+        "✅ Из Фонда переведено <b>{amount} {currency_symbol}</b> пользователю @{username}.\n"
+        "🏛 Остаток в Фонде: <b>{new_fund_balance} {currency_symbol}</b>"
+    ),
+    "msg_user_fund_pay_received": (
+        "🏛 Вам поступил перевод из <b>Фонда сообщества</b>!\n\n"
+        "<b>Сумма:</b> {amount} {currency_symbol}\n"
+        "<b>Комментарий:</b> {comment}"
+    ),
+    "err_admin_only_super": "⛔️ Только Главный администратор может изменять права администраторов.",
+    "err_admin_cannot_demote_super": "⛔️ Нельзя снять права с Главного администратора системы.",
 }

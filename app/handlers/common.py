@@ -158,9 +158,10 @@ async def send_invite_link(target: Message | CallbackQuery):
     # 1. Проверяем, не состоит ли пользователь уже в группе
     is_member = await check_is_group_member(bot, user_id)
     if is_member:
-        text = "Вы уже являетесь участником группы! 🎉"
+        text = LEXICON_RU["msg_already_group_member"]
         if message_to_edit:
-            await message_to_edit.edit_text(text)
+            await message_to_edit.edit_reply_markup(reply_markup=None)
+            await target.answer(text, show_alert=True)
         else:
             await target.answer(text)
         return
@@ -175,17 +176,18 @@ async def send_invite_link(target: Message | CallbackQuery):
             name=f"Invite for {target.from_user.full_name}"
         )
         builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text="🚀 Вступить в группу", url=invite_link_obj.invite_link))
-        text = "Ваша персональная ссылка для вступления в группу готова! Нажмите кнопку ниже:"
+        builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_join_group"], url=invite_link_obj.invite_link))
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=builder.as_markup(), disable_web_page_preview=True)
+            # Сохраняем исходное сообщение с приветствием и правилами, заменяя только кнопку
+            await message_to_edit.edit_reply_markup(reply_markup=builder.as_markup())
         else:
+            text = LEXICON_RU["msg_invite_link_ready"]
             await target.answer(text, reply_markup=builder.as_markup(), disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Failed to create invite link: {e}")
         text = LEXICON_RU["err_invite_link"]
         if message_to_edit:
-            await message_to_edit.edit_text(text)
+            await target.answer(text, show_alert=True)
         else:
             await target.answer(text)
 
@@ -280,11 +282,9 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
                 currency_symbol=CURRENCY_SYMBOL,
                 username=html.escape(new_member.full_name or new_member.first_name or "Участник")
             )
-            from app.keyboards import get_back_to_menu_keyboard
             await bot.send_message(
                 new_member.id,
                 bonus_text,
-                reply_markup=get_back_to_menu_keyboard(),
                 parse_mode="HTML"
             )
     except Exception as e:

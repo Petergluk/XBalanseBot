@@ -108,7 +108,7 @@ async def cmd_event(target: Message | CallbackQuery):
 
     dated_events.sort(key=lambda x: x[0]) # Сортируем по дате
     this_week_events = [event for run_time, event in dated_events if run_time <= week_ahead]
-    
+
     if not this_week_events:
         from app.keyboards import get_back_to_menu_keyboard
         text = LEXICON_RU["msg_events_none_this_week"]
@@ -156,8 +156,8 @@ async def start_event_creation_from_activity(callback: CallbackQuery, state: FSM
     if not await is_admin(callback.from_user.id):
         await callback.answer(LEXICON_RU["err_no_admin_rights_alert"], show_alert=True)
         return
-    
-    # If called from activity directly, activity_id might be in state already 
+
+    # If called from activity directly, activity_id might be in state already
     # or we can extract it if callback_data is provided
     if callback_data:
         activity_id = callback_data.activity_id
@@ -189,15 +189,15 @@ async def process_event_name(message: Message, state: FSMContext):
     if name.strip() == '.': name = None
     await state.update_data(name=name)
     await state.set_state(EventCreationStates.waiting_for_event_description)
-    
+
     activity = await db.get_activity(data['activity_id'])
-    
+
     prompt_text = LEXICON_RU["msg_event_ask_description"].format(activity_desc=activity['description'] or LEXICON_RU["msg_activity_no_description"])
     keyboard = get_use_default_keyboard(
         LEXICON_RU["btn_use_activity_desc"],
         EventCreationAction(action="use_activity_desc").pack()
     )
-    
+
     sent_message = await message.answer(
         prompt_text,
         reply_markup=keyboard,
@@ -210,7 +210,7 @@ async def process_event_name(message: Message, state: FSMContext):
 async def process_use_activity_description(callback: CallbackQuery, state: FSMContext, callback_data: EventCreationAction):
     await state.update_data(description=None)
     await state.set_state(EventCreationStates.waiting_for_type)
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Разовое", callback_data=EventCreationAction(action="set_type", event_type="single").pack())],
         [InlineKeyboardButton(text="Регулярное", callback_data=EventCreationAction(action="set_type", event_type="recurring").pack())]
@@ -221,21 +221,21 @@ async def process_use_activity_description(callback: CallbackQuery, state: FSMCo
 @router.message(EventCreationStates.waiting_for_event_description)
 async def process_event_description(message: Message, state: FSMContext):
     data = await state.get_data()
-    
+
     if len(message.text) > 4000:
         await message.reply("Описание слишком длинное (макс. 4000 символов). Пожалуйста, сократите текст.")
         return
-        
+
     message_ids = add_message_id_to_state(data, message.message_id)
-    
+
     await state.update_data(description=message.text)
     await state.set_state(EventCreationStates.waiting_for_type)
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=LEXICON_RU["btn_event_type_single"], callback_data=EventCreationAction(action="set_type", event_type="single").pack())],
         [InlineKeyboardButton(text=LEXICON_RU["btn_event_type_recurring"], callback_data=EventCreationAction(action="set_type", event_type="recurring").pack())]
     ])
-    
+
     sent_message = await message.answer(
         LEXICON_RU["msg_event_ask_type"],
         reply_markup=keyboard
@@ -252,6 +252,7 @@ async def process_event_type(callback: CallbackQuery, state: FSMContext, callbac
         await state.set_state(EventCreationStates.waiting_for_date)
         await callback.message.edit_text(
             LEXICON_RU["msg_event_ask_date_single"],
+            reply_markup=get_cancel_dialog_keyboard(),
             parse_mode="HTML"
         )
     else:
@@ -268,11 +269,15 @@ async def proceed_to_cost_from_date(message: Message, state: FSMContext):
     data = await state.get_data()
     message_ids = data.get('message_ids', [])
     message_ids.append(message.message_id)
-    
+
     await state.update_data(message_ids=message_ids)
     await state.set_state(EventCreationStates.waiting_for_cost)
-    prompt_text = LEXICON_RU["msg_event_ask_cost"]
-    
+
+    if data.get('activity_id') == 1:
+        prompt_text = LEXICON_RU["msg_event_ask_cost"]
+    else:
+        prompt_text = LEXICON_RU["msg_event_ask_sub_cost"].format(currency_symbol=CURRENCY_SYMBOL)
+
     sent_message = await message.answer(
         prompt_text,
         reply_markup=get_cancel_dialog_keyboard(),
@@ -349,6 +354,10 @@ async def process_time_in_weekday_state(message: Message, state: FSMContext):
             text=LEXICON_RU["btn_event_no_end_date"],
             callback_data=EventCreationAction(action="no_end_date").pack()
         ))
+        builder.row(InlineKeyboardButton(
+            text=LEXICON_RU["btn_cancel"],
+            callback_data=GeneralAction(action="cancel_dialog").pack()
+        ))
         await message.answer(
             LEXICON_RU["msg_event_ask_end_date"].format(
                 weekdays=format_weekdays(weekday_str),
@@ -373,6 +382,10 @@ async def process_event_time(message: Message, state: FSMContext):
         builder.row(InlineKeyboardButton(
             text=LEXICON_RU["btn_event_no_end_date"],
             callback_data=EventCreationAction(action="no_end_date").pack()
+        ))
+        builder.row(InlineKeyboardButton(
+            text=LEXICON_RU["btn_cancel"],
+            callback_data=GeneralAction(action="cancel_dialog").pack()
         ))
         await message.answer(
             LEXICON_RU["msg_event_ask_end_date"].format(
@@ -412,8 +425,72 @@ async def process_event_cost(message: Message, state: FSMContext):
         cost = Decimal(message.text.replace(',', '.'))
         if cost < 0: raise ValueError()
         await state.update_data(cost=str(cost))
+        if data.get('activity_id') == 1:
+            await state.update_data(allow_manual_registration=False, single_cost=None)
+            await state.set_state(EventCreationStates.waiting_for_link)
+            sent_message = await message.answer(
+                LEXICON_RU["msg_event_ask_link"],
+                reply_markup=get_cancel_dialog_keyboard(),
+                parse_mode="HTML"
+            )
+        else:
+            from app.keyboards import get_event_access_mode_keyboard
+            await state.set_state(EventCreationStates.waiting_for_access_mode)
+            sent_message = await message.answer(
+                LEXICON_RU["msg_event_ask_access_mode"],
+                reply_markup=get_event_access_mode_keyboard(),
+                parse_mode="HTML"
+            )
+        message_ids.append(sent_message.message_id)
+        await state.update_data(message_ids=message_ids)
+
+    except (InvalidOperation, ValueError):
+        await message.reply(LEXICON_RU["err_event_invalid_cost"])
+
+
+@router.callback_query(EventCreationAction.filter(F.action == "set_access"), EventCreationStates.waiting_for_access_mode)
+async def process_event_access_mode(callback: CallbackQuery, state: FSMContext, callback_data: EventCreationAction):
+    data = await state.get_data()
+    allow_single = bool(callback_data.allow_single)
+    if allow_single:
+        await state.update_data(allow_manual_registration=True)
+        await state.set_state(EventCreationStates.waiting_for_single_cost)
+        sub_cost_str = format_amount(Decimal(str(data.get('cost', '0'))))
+        await callback.message.edit_text(
+            LEXICON_RU["msg_event_ask_single_cost"].format(
+                sub_cost=sub_cost_str,
+                currency_symbol=CURRENCY_SYMBOL
+            ),
+            reply_markup=get_cancel_dialog_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        await state.update_data(allow_manual_registration=False, single_cost=None)
         await state.set_state(EventCreationStates.waiting_for_link)
-        
+        await callback.message.edit_text(
+            LEXICON_RU["msg_event_ask_link"],
+            reply_markup=get_cancel_dialog_keyboard(),
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@router.message(EventCreationStates.waiting_for_single_cost)
+async def process_event_single_cost(message: Message, state: FSMContext):
+    data = await state.get_data()
+    message_ids = data.get('message_ids', [])
+    message_ids.append(message.message_id)
+
+    try:
+        raw_text = message.text.strip()
+        if raw_text == '.':
+            single_cost = Decimal(str(data.get('cost', '0')))
+        else:
+            single_cost = Decimal(raw_text.replace(',', '.'))
+            if single_cost < 0:
+                raise ValueError()
+        await state.update_data(single_cost=str(single_cost))
+        await state.set_state(EventCreationStates.waiting_for_link)
         sent_message = await message.answer(
             LEXICON_RU["msg_event_ask_link"],
             reply_markup=get_cancel_dialog_keyboard(),
@@ -451,6 +528,49 @@ async def process_event_link(message: Message, state: FSMContext):
     await state.update_data(message_ids=message_ids)
 
 
+async def _build_live_reminder_preview(data: dict, reminder_time: int, template_str: str) -> str:
+    """Формирует живой предпросмотр текста напоминания с подставленными переменными текущего события."""
+    activity = await db.get_activity(data.get('activity_id')) if data.get('activity_id') else None
+    event_name = data.get('name') or (activity['name'] if activity else "Событие")
+    event_description = data.get('description') or (activity['description'] if activity else "")
+
+    next_run_dt = None
+    try:
+        if data.get('event_type') == 'single' and data.get('event_date'):
+            ed = data['event_date']
+            next_run_dt = datetime.fromisoformat(ed) if isinstance(ed, str) else ed
+        elif data.get('event_time'):
+            et = time.fromisoformat(data['event_time']) if isinstance(data['event_time'], str) else data['event_time']
+            raw_end = data.get('end_date')
+            end_d = datetime.strptime(raw_end, "%Y-%m-%d").date() if isinstance(raw_end, str) else raw_end
+            next_run_dt = get_next_run_time('recurring', None, data.get('weekday'), et, None, end_d)
+    except Exception:
+        next_run_dt = None
+
+    start_date = next_run_dt.strftime('%d.%m.%Y') if next_run_dt else 'ДД.ММ.ГГГГ'
+    start_time = next_run_dt.strftime('%H:%M') if next_run_dt else 'ЧЧ:ММ'
+
+    try:
+        cost_val = Decimal(str(data.get('cost', '0')))
+    except Exception:
+        cost_val = Decimal('0')
+    cost_str = format_amount(cost_val) if cost_val > 0 else "Бесплатно"
+    curr_str = CURRENCY_SYMBOL if cost_val > 0 else ""
+
+    from app.utils import safe_format_template
+    return safe_format_template(
+        template_str,
+        event_name=html.escape(str(event_name)),
+        event_description=html.escape(str(event_description)),
+        start_date=start_date,
+        start_time=start_time,
+        cost=cost_str,
+        currency_symbol=curr_str,
+        reminder_minutes=reminder_time,
+        link=html.escape(str(data.get('link') or "—")),
+    )
+
+
 @router.message(EventCreationStates.waiting_for_reminder_time)
 async def process_event_reminder_time(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -465,12 +585,17 @@ async def process_event_reminder_time(message: Message, state: FSMContext):
         if reminder_time > 0:
             await state.set_state(EventCreationStates.waiting_for_reminder_text)
             default_reminder = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
-            
+            rendered_preview = await _build_live_reminder_preview(data, reminder_time, default_reminder)
+
             prompt_text = LEXICON_RU["msg_event_ask_reminder_text"].format(
-                default_reminder=default_reminder,
+                rendered_preview=rendered_preview,
+                default_reminder=html.escape(default_reminder),
                 vars_help=REMINDER_VARIABLES_HELP_TEXT
             )
-            keyboard = get_use_default_keyboard("Использовать шаблон по умолчанию", EventCreationAction(action="use_default_reminder").pack())
+            keyboard = get_use_default_keyboard(
+                LEXICON_RU["btn_use_default_reminder"],
+                EventCreationAction(action="use_default_reminder").pack()
+            )
             sent_message = await message.answer(prompt_text, reply_markup=keyboard, parse_mode="HTML")
             message_ids.append(sent_message.message_id)
             await state.update_data(message_ids=message_ids)
@@ -500,10 +625,10 @@ async def show_event_preview(target: Message | CallbackQuery, state: FSMContext)
     message_ids = list(data.get('message_ids', []))
 
     activity = await db.get_activity(data['activity_id'])
-    
+
     name = data.get('name') or activity['name']
     description = data.get('description') or activity['description']
-    
+
     schedule_str = LEXICON_RU["msg_event_schedule_not_determined"]
     if data['event_type'] == 'single':
         parsed_date = datetime.fromisoformat(data['event_date'])
@@ -517,7 +642,15 @@ async def show_event_preview(target: Message | CallbackQuery, state: FSMContext)
         end_date_label = LEXICON_RU["msg_event_end_date_label"].format(end_date=end_date_str) if end_date_str else LEXICON_RU["msg_event_no_end_date_label"]
         schedule_str = LEXICON_RU["msg_event_preview_schedule_recurring"].format(weekdays=format_weekdays(data['weekday']), time_str=parsed_time.strftime('%H:%M'), msk_label=MSK_LABEL) + f" ({end_date_label})"
 
-    cost = format_amount(Decimal(data['cost']))
+    sub_cost_fmt = format_amount(Decimal(str(data['cost'])))
+    if data.get('allow_manual_registration'):
+        raw_single = data.get('single_cost')
+        single_fmt = format_amount(Decimal(str(raw_single))) if raw_single is not None else sub_cost_fmt
+        cost = f"{sub_cost_fmt} {CURRENCY_SYMBOL} (по подписке) | 🎟 Разово без подписки: {single_fmt}"
+    elif data.get('activity_id') != 1:
+        cost = f"{sub_cost_fmt} (🔒 только по подписке)"
+    else:
+        cost = sub_cost_fmt
     reminder = f"{data['reminder_time']} мин." if data['reminder_time'] > 0 else LEXICON_RU["msg_event_no_reminder"]
 
     preview_text = LEXICON_RU["msg_event_preview_details"].format(
@@ -550,19 +683,25 @@ async def confirm_event_creation(callback: CallbackQuery, state: FSMContext, cal
     await create_event_from_state(callback, state, scheduler)
 
 async def create_event_from_state(target: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+    try:
+        await target.answer("✅ Сохраняю событие...")
+    except Exception:
+        pass
     data = await state.get_data()
     bot = target.bot
     chat_id = target.message.chat.id
     from_user_id = target.from_user.id
-    
+
     await cleanup_creation_dialog(bot, chat_id, state)
-    
+
     event_data = {
         'activity_id': data.get('activity_id'),
         'name': data.get('name'),
         'description': data.get('description'),
         'event_type': data['event_type'],
         'cost': data['cost'],
+        'allow_manual_registration': bool(data.get('allow_manual_registration', False)),
+        'single_cost': data.get('single_cost'),
         'link': data['link'],
         'reminder_time': data['reminder_time'],
         'reminder_text': data.get('reminder_text'),
@@ -762,7 +901,7 @@ async def update_event_weekday_confirm(callback: CallbackQuery, state: FSMContex
     weekday_str = ",".join(map(str, sorted(selected)))
     await state.update_data(weekday=weekday_str)
     await state.set_state(EventEditStates.waiting_for_new_time)
-    
+
     text = LEXICON_RU["msg_event_edit_time_recurring"].format(weekdays=format_weekdays(weekday_str))
     try:
         await callback.message.edit_text(text, parse_mode="HTML")
@@ -791,12 +930,17 @@ async def update_event_time(message: Message, state: FSMContext, scheduler: Asyn
 @router.callback_query(EventEditAction.filter(F.action == "cost"))
 async def process_edit_event_cost(callback: CallbackQuery, state: FSMContext, callback_data: EventEditAction):
     event_id = callback_data.event_id
-    await state.update_data(event_id=event_id)
-    await state.set_state(EventEditStates.waiting_for_new_cost)
     event = await db.get_event(event_id)
+    await state.update_data(event_id=event_id, activity_id=event.get('activity_id'))
+    await state.set_state(EventEditStates.waiting_for_new_cost)
     current_cost = format_amount(event['cost'])
     text = LEXICON_RU["msg_event_edit_cost"].format(current_cost=current_cost, currency_symbol=CURRENCY_SYMBOL)
-    if event['activity_id'] == 1:
+    if event.get('allow_manual_registration'):
+        single_c = format_amount(event['single_cost'] if event.get('single_cost') is not None else event['cost'])
+        text += f"Режим: <b>🎟 Открыто для разового участия ({single_c} {CURRENCY_SYMBOL})</b>\n\n"
+    elif event.get('activity_id') != 1:
+        text += "Режим: <b>🔒 Только по подписке на активность</b>\n\n"
+    if event.get('activity_id') == 1:
         text += LEXICON_RU["msg_event_edit_cost_warning"]
     text += LEXICON_RU["msg_event_edit_cost_prompt"]
     await callback.message.edit_text(text, reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
@@ -810,7 +954,69 @@ async def update_event_cost(message: Message, state: FSMContext):
             raise ValueError()
         data = await state.get_data()
         event_id = data['event_id']
-        await db.update_event(event_id, cost=str(new_cost))
+        activity_id = data.get('activity_id')
+        if activity_id == 1:
+            await db.update_event(event_id, cost=str(new_cost), allow_manual_registration=False, single_cost=None)
+            await message.answer(LEXICON_RU["msg_event_cost_updated"], reply_markup=await get_event_edit_keyboard(event_id))
+            await state.clear()
+        else:
+            from app.keyboards import get_event_access_mode_keyboard
+            await state.update_data(new_cost=str(new_cost))
+            await state.set_state(EventEditStates.waiting_for_new_access_mode)
+            await message.answer(
+                LEXICON_RU["msg_event_ask_access_mode"],
+                reply_markup=get_event_access_mode_keyboard(),
+                parse_mode="HTML"
+            )
+    except (InvalidOperation, ValueError):
+        await message.reply(LEXICON_RU["err_event_invalid_cost"])
+
+
+@router.callback_query(EventCreationAction.filter(F.action == "set_access"), EventEditStates.waiting_for_new_access_mode)
+async def update_event_access_mode(callback: CallbackQuery, state: FSMContext, callback_data: EventCreationAction):
+    data = await state.get_data()
+    event_id = data['event_id']
+    new_cost = data['new_cost']
+    if callback_data.allow_single:
+        await state.set_state(EventEditStates.waiting_for_new_single_cost)
+        await callback.message.edit_text(
+            LEXICON_RU["msg_event_ask_single_cost"].format(
+                sub_cost=format_amount(Decimal(str(new_cost))),
+                currency_symbol=CURRENCY_SYMBOL
+            ),
+            reply_markup=get_cancel_dialog_keyboard(),
+            parse_mode="HTML"
+        )
+    else:
+        await db.update_event(event_id, cost=new_cost, allow_manual_registration=False, single_cost=None)
+        await callback.message.edit_text(
+            LEXICON_RU["msg_event_cost_updated"],
+            reply_markup=await get_event_edit_keyboard(event_id),
+            parse_mode="HTML"
+        )
+        await state.clear()
+    await callback.answer()
+
+
+@router.message(EventEditStates.waiting_for_new_single_cost)
+async def update_event_single_cost(message: Message, state: FSMContext):
+    data = await state.get_data()
+    event_id = data['event_id']
+    new_cost = data['new_cost']
+    try:
+        raw_text = message.text.strip()
+        if raw_text == '.':
+            single_cost = Decimal(str(new_cost))
+        else:
+            single_cost = Decimal(raw_text.replace(',', '.'))
+            if single_cost < 0:
+                raise ValueError()
+        await db.update_event(
+            event_id,
+            cost=new_cost,
+            allow_manual_registration=True,
+            single_cost=str(single_cost)
+        )
         await message.answer(LEXICON_RU["msg_event_cost_updated"], reply_markup=await get_event_edit_keyboard(event_id))
         await state.clear()
     except (InvalidOperation, ValueError):
@@ -863,8 +1069,21 @@ async def update_event_reminder_time(message: Message, state: FSMContext, schedu
         await state.update_data(reminder_time=new_time)
         if new_time > 0:
             await state.set_state(EventEditStates.waiting_for_new_reminder_text)
+            event = await db.get_event(event_id)
+            default_reminder = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
+            current_tpl = (event.get('reminder_text') if event else None) or default_reminder
+            rendered_preview = await _build_live_reminder_preview(dict(event) if event else data, new_time, current_tpl)
+            keyboard = get_use_default_keyboard(
+                LEXICON_RU["btn_use_default_reminder"],
+                EventCreationAction(action="use_default_reminder").pack()
+            )
             await message.answer(
-                LEXICON_RU["msg_event_edit_reminder_text"].format(vars_help=REMINDER_VARIABLES_HELP_TEXT),
+                LEXICON_RU["msg_event_edit_reminder_text"].format(
+                    rendered_preview=rendered_preview,
+                    default_reminder=html.escape(current_tpl),
+                    vars_help=REMINDER_VARIABLES_HELP_TEXT
+                ),
+                reply_markup=keyboard,
                 parse_mode="HTML"
             )
         else:
@@ -877,6 +1096,24 @@ async def update_event_reminder_time(message: Message, state: FSMContext, schedu
             await state.clear()
     except ValueError:
         await message.reply(LEXICON_RU["err_event_invalid_reminder_time"])
+
+@router.callback_query(EventCreationAction.filter(F.action == "use_default_reminder"), EventEditStates.waiting_for_new_reminder_text)
+async def update_event_reminder_use_default(callback: CallbackQuery, state: FSMContext, scheduler: AsyncIOScheduler):
+    await callback.answer()
+    data = await state.get_data()
+    event_id = data['event_id']
+    reminder_time = data['reminder_time']
+    event = await db.get_event(event_id)
+    default_reminder = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
+    reminder_text = (event.get('reminder_text') if event else None) or default_reminder
+    await db.update_event(event_id, reminder_time=reminder_time, reminder_text=reminder_text)
+    event = await db.get_event(event_id)
+    remove_event_jobs(event_id, scheduler)
+    if event:
+        await schedule_event_jobs(event, callback.bot, scheduler)
+    await callback.message.edit_text(LEXICON_RU["msg_event_reminder_updated"], reply_markup=await get_event_edit_keyboard(event_id))
+    await state.clear()
+
 
 @router.message(EventEditStates.waiting_for_new_reminder_text)
 async def update_event_reminder_text(message: Message, state: FSMContext, scheduler: AsyncIOScheduler):
@@ -898,38 +1135,42 @@ async def update_event_reminder_text(message: Message, state: FSMContext, schedu
 async def process_grace_credit_click(callback: CallbackQuery, callback_data: GraceCreditAction, bot: Bot):
     event_id = callback_data.event_id
     user_telegram_id = callback.from_user.id
-    
+
     # 1. Получаем пользователя и событие
     user = await db.get_user(telegram_id=user_telegram_id)
     event = await db.get_event(event_id)
-    
+
     if not user:
         await callback.answer("❌ Пользователь не найден.", show_alert=True)
         return
-        
+
     if not event:
         await callback.answer("❌ Событие не найдено или удалено.", show_alert=True)
         return
-        
+
     fee = event['cost']
+    if event.get('single_cost') is not None and event.get('activity_id') and event.get('activity_id') != 1:
+        is_sub = await db.is_user_subscribed(user_telegram_id, event['activity_id'])
+        if not is_sub:
+            fee = event['single_cost']
     event_name = event['name'] or event['activity_name']
     escaped_event_name = html.escape(event_name)
     fund_user_id = SYSTEM_FUND_USER_ID
-    
+
     # 2. Оборачиваем в транзакцию с FOR UPDATE на пользователя
     async with db.pool.connection() as conn:
         async with conn.transaction():
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("SELECT balance, grace_credit_used FROM users WHERE id = %s FOR UPDATE", (user['id'],))
                 db_user = await cur.fetchone()
-                
+
             if not db_user:
                 await callback.answer("❌ Пользователь не найден в БД.", show_alert=True)
                 return
-                
+
             balance = db_user['balance']
             grace_credit_used = db_user['grace_credit_used']
-            
+
             # 3. Проверяем баланс и кредит повторно (защита от двойного клика)
             if balance >= fee:
                 # Вдруг баланс уже пополнен? Списываем без кредита!
@@ -945,11 +1186,11 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
                         "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
                         (fee, SUPER_ADMIN_ID)
                     )
-                
+
                 # Обновляем сообщение в чате
                 next_run_dt = event['event_date'] or datetime.now()
                 start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')}" if event['event_date'] else ""
-                
+
                 success_text = (
                     f"▶️ <b>Вы подтвердили участие в событии: «{escaped_event_name}»</b>\n"
                     f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
@@ -958,12 +1199,12 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
                 await callback.message.edit_text(success_text, parse_mode="HTML", reply_markup=None)
                 await callback.answer("✅ Участие подтверждено!")
                 return
-                
+
             if grace_credit_used:
                 await callback.answer("❌ Вы уже использовали свой кредит доверия. Пожалуйста, пополните баланс.", show_alert=True)
                 await callback.message.edit_reply_markup(reply_markup=None)
                 return
-                
+
             # 4. Проводим списание по кредиту доверия
             from app.config import SUPER_ADMIN_ID
             await conn.execute(
@@ -980,11 +1221,11 @@ async def process_grace_credit_click(callback: CallbackQuery, callback_data: Gra
                     "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
                     (fee, SUPER_ADMIN_ID)
                 )
-            
+
             # 5. Обновляем сообщение пользователя
             next_run_dt = event['event_date'] or datetime.now()
             start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')}" if event['event_date'] else ""
-            
+
             success_text = (
                 f"▶️ <b>Вы получили кредит и подтвердили участие в событии: «{escaped_event_name}»</b>\n"
                 f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"

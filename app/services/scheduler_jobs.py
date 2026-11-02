@@ -80,22 +80,26 @@ async def _get_final_participants(event: dict, event_date: date) -> list:
         base_subscribers = await db.get_all_users()
     else:
         base_subscribers = await db.get_activity_subscribers(activity_id)
-    
+
     base_subscriber_ids = {user['id'] for user in base_subscribers}
-    
-    # 2. Получаем исключения на дату
-    overrides = await db.get_event_overrides_for_date(event_id, event_date)
-    
-    manually_registered_ids = {ov['user_id'] for ov in overrides if ov['status'] == 'registered'}
-    manually_unregistered_ids = {ov['user_id'] for ov in overrides if ov['status'] == 'unregistered'}
-    
-    # 3. Формируем финальный список ID
-    final_participant_ids = (base_subscriber_ids - manually_unregistered_ids) | manually_registered_ids
-    
+
+    # 2. Получаем исключения на дату (только если событие открыто для разового посещения / ручной записи)
+    if event.get('allow_manual_registration', True):
+        overrides = await db.get_event_overrides_for_date(event_id, event_date)
+        manually_registered_ids = {ov['user_id'] for ov in overrides if ov['status'] == 'registered'}
+        manually_unregistered_ids = {ov['user_id'] for ov in overrides if ov['status'] == 'unregistered'}
+        final_participant_ids = (base_subscriber_ids - manually_unregistered_ids) | manually_registered_ids
+    else:
+        manually_registered_ids = set()
+        final_participant_ids = base_subscriber_ids
+
     if not final_participant_ids:
         return []
 
-    return await db.get_users_by_ids(list(final_participant_ids))
+    users = await db.get_users_by_ids(list(final_participant_ids))
+    for u in users:
+        u['is_single_visitor'] = (u['id'] not in base_subscriber_ids and u['id'] in manually_registered_ids)
+    return users
 
 
 async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler, scheduled_start_dt: datetime):
@@ -104,9 +108,9 @@ async def run_event_payment(event_id: int, bot: Bot, scheduler: AsyncIOScheduler
     if not event or not event['is_active']:
         logger.warning(f"Job run_event_payment for event {event_id} skipped: event not found or inactive.")
         return
-    
+
     logger.info(f"Running payment job for event {event_id} ('{event['name'] or event['activity_name']}')")
-    
+
     await handle_payment_for_event(bot, event, scheduled_start_dt)
 
     await db.update_event(event_id, last_run=datetime.now(MOSCOW_TZ))
@@ -122,17 +126,18 @@ async def run_event_reminder(event_id: int, bot: Bot, scheduled_start_dt: dateti
     if not event or not event['is_active']:
         logger.warning(f"Job run_event_reminder for event {event_id} skipped: event not found or inactive.")
         return
-        
+
     logger.info(f"Running reminder job for event {event_id} ('{event['name'] or event['activity_name']}')")
-    
+
     await handle_reminders_for_event(bot, event, scheduled_start_dt)
 
 async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: datetime | None = None):
     """Обрабатывает списания для конкретного наступившего события."""
     event_name = event['name'] or event['activity_name']
     escaped_event_name = html.escape(event_name)
-    fee = event['cost']
-    
+    sub_fee = Decimal(str(event['cost']))
+    single_fee = Decimal(str(event['single_cost'])) if event.get('single_cost') is not None else sub_fee
+
     next_run_dt = event_start_dt or get_next_run_time(
         event['event_type'],
         event.get('event_date'),
@@ -144,36 +149,45 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
     if not next_run_dt:
         logger.warning(f"Could not determine next run time for payment of event {event['id']}. Skipping.")
         return
-    
-    participants = await _get_final_participants(event, next_run_dt.date())
 
+    participants = await _get_final_participants(event, next_run_dt.date())
     if not participants:
         logger.info(f"No participants found for event {event['id']}, skipping payments.")
         return
 
     logger.info(f"Processing payments for {len(participants)} users for event '{event_name}'.")
-    
-    if fee <= 0:
+
+    if sub_fee <= 0 and single_fee <= 0:
         logger.info(f"Event {event['id']} has zero cost, skipping payments.")
         return
-        
+
     fund_user_id = SYSTEM_FUND_USER_ID
     notifications_to_send = []
-    
+
     async with db.pool.connection() as conn:
         async with conn.transaction():
             for user in participants:
+                fee = single_fee if user.get('is_single_visitor') else sub_fee
+                if fee <= 0:
+                    start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
+                    notification_text = (
+                        f"▶️ <b>Начинается событие: «{escaped_event_name}»</b>\n"
+                        f"🔗 Ссылка для подключения: {event.get('link') or '—'}{start_time_str}\n\n"
+                        f"Участие по вашему тарифу бесплатное."
+                    )
+                    notifications_to_send.append((user['telegram_id'], notification_text, None))
+                    continue
                 # Получаем текущий баланс и статус кредита с блокировкой строки
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute("SELECT balance, grace_credit_used FROM users WHERE id = %s FOR UPDATE", (user['id'],))
                     db_user = await cur.fetchone()
-                
+
                 if not db_user:
                     continue
-                
+
                 balance = db_user['balance']
                 grace_credit_used = db_user['grace_credit_used']
-                
+
                 if balance >= fee:
                     # Обычная оплата (быстро внутри БД-транзакции)
                     from app.config import SUPER_ADMIN_ID
@@ -188,7 +202,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                             "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
                             (fee, SUPER_ADMIN_ID)
                         )
-                    
+
                     start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
                     notification_text = (
                         f"▶️ <b>Начинается событие: «{escaped_event_name}»</b>\n"
@@ -196,18 +210,18 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                         f"С вашего счета списано {format_amount(fee)} {CURRENCY_SYMBOL} за участие."
                     )
                     notifications_to_send.append((user['telegram_id'], notification_text, None))
-                        
+
                 elif not grace_credit_used:
                     from app.callbacks import GraceCreditAction
                     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                    
+
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(
                             text="💳 Взять кредит доверия",
                             callback_data=GraceCreditAction(event_id=event['id']).pack()
                         )
                     ]])
-                    
+
                     start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
                     notification_text = (
                         f"⚠️ <b>Предстоящее событие: «{escaped_event_name}»</b>{start_time_str}\n\n"
@@ -215,7 +229,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                         f"Вы можете воспользоваться разовым кредитом доверия из фонда, чтобы подтвердить участие и получить ссылку на событие."
                     )
                     notifications_to_send.append((user['telegram_id'], notification_text, keyboard))
-                        
+
                 else:
                     notification_text = (
                         f"⚠️ <b>Предстоящее событие: «{escaped_event_name}»</b>\n\n"
@@ -231,7 +245,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
             await bot.send_message(tg_id, text_msg, parse_mode="HTML", reply_markup=reply_kb)
         except Exception as e:
             logger.warning(f"Failed to send event payment notification to user {tg_id}: {e}")
-    
+
     logger.info(f"Successfully processed payments for event {event['id']}.")
 
 async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: datetime | None = None):
@@ -257,28 +271,31 @@ async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: date
         return
 
     logger.info(f"Sending reminders to {len(participants)} users for event '{event['name'] or event['activity_name']}'.")
-    
+
     event_name = event['name'] or event['activity_name']
     event_description = event['description'] or event['activity_description']
-    
+
     from app.utils import safe_format_template
     reminder_text = event.get('reminder_text')
     if not reminder_text or reminder_text == ".":
         reminder_text = await db.get_setting('default_reminder_text', LEXICON_RU["default_reminder"])
 
-    formatted_text = safe_format_template(
-        reminder_text,
-        event_name=html.escape(event_name or ''),
-        event_description=html.escape(event_description or ''),
-        start_date=next_run_dt.strftime('%d.%m.%Y'),
-        start_time=next_run_dt.strftime('%H:%M') + f" ({MSK_LABEL})",
-        cost=format_amount(event['cost']),
-        currency_symbol=CURRENCY_SYMBOL,
-        reminder_minutes=event['reminder_time'],
-        link=event.get('link') or ''
-    )
+    sub_fee = event['cost']
+    single_fee = event['single_cost'] if event.get('single_cost') is not None else sub_fee
 
     for user in participants:
+        user_cost = single_fee if user.get('is_single_visitor') else sub_fee
+        formatted_text = safe_format_template(
+            reminder_text,
+            event_name=html.escape(event_name or ''),
+            event_description=html.escape(event_description or ''),
+            start_date=next_run_dt.strftime('%d.%m.%Y'),
+            start_time=next_run_dt.strftime('%H:%M') + f" ({MSK_LABEL})",
+            cost=format_amount(user_cost),
+            currency_symbol=CURRENCY_SYMBOL,
+            reminder_minutes=event['reminder_time'],
+            link=event.get('link') or ''
+        )
         try:
             await bot.send_message(user['telegram_id'], formatted_text, parse_mode="HTML")
         except Exception as e:
@@ -287,7 +304,7 @@ async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: date
 async def process_demurrage(bot: Bot):
     """Ежедневный процесс демерреджа."""
     logger.info("Checking daily demurrage process...")
-    
+
     is_enabled = await db.get_setting('demurrage_enabled', '0') == '1'
     if not is_enabled:
         logger.info("Demurrage is disabled. Skipping.")
@@ -298,15 +315,15 @@ async def process_demurrage(bot: Bot):
         interval = int(interval_str)
         last_run_str = await db.get_setting('demurrage_last_run', '1970-01-01')
         last_run_date = datetime.strptime(last_run_str, '%Y-%m-%d').date()
-        
+
         days_since_last_run = (date.today() - last_run_date).days
-        
+
         if days_since_last_run < interval:
             logger.info(f"Demurrage check: {days_since_last_run}/{interval} days passed. Skipping.")
             return
-            
+
         logger.info("Demurrage interval passed. Starting process...")
-        
+
         rate_str = await db.get_setting('demurrage_rate', '1.0')
         rate = Decimal(rate_str) / 100
         if rate <= 0:
@@ -323,14 +340,14 @@ async def process_demurrage(bot: Bot):
         batch_size = 100
         fund_user_id = SYSTEM_FUND_USER_ID
         comment_text = f"Демерредж {rate*100}%"
-        
+
         import asyncio
-        
+
         while True:
             updates_to_run = []
             inserts_to_run = []
             batch_demurrage = Decimal('0')
-            
+
             async with db.pool.connection() as conn:
                 async with conn.transaction():
                     # Блокируем счет Фонда (id = 0) первым, соблюдая строгий восходящий порядок ID и исключая Deadlock:
@@ -341,10 +358,10 @@ async def process_demurrage(bot: Bot):
                             (last_processed_id, batch_size)
                         )
                         users_batch = await cur.fetchall()
-                    
+
                     if not users_batch:
                         break
-                    
+
                     from decimal import ROUND_HALF_UP
                     for user in users_batch:
                         last_processed_id = user['id']
@@ -354,12 +371,12 @@ async def process_demurrage(bot: Bot):
                         # Минимальный срез 1 Ӫ — проектное решение (1 Ӫ ≈ 1 RUB): отключение накопительной функции
                         # для оставленных микробалансов без использования дробных копеек
                         demurrage_amount = min(user['balance'], max(Decimal('1'), raw_cut))
-                        
+
                         updates_to_run.append((demurrage_amount, user['id']))
                         inserts_to_run.append((user['id'], fund_user_id, demurrage_amount, "demurrage", comment_text))
-                        
+
                         batch_demurrage += demurrage_amount
-                        
+
                     if updates_to_run:
                         async with conn.cursor() as batch_cur:
                             await batch_cur.executemany("UPDATE users SET balance = balance - %s WHERE id = %s", updates_to_run)
@@ -367,21 +384,21 @@ async def process_demurrage(bot: Bot):
                                 "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
                                 inserts_to_run
                             )
-                        
+
                         await conn.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (batch_demurrage, fund_user_id))
-                        
+
                         total_demurrage += batch_demurrage
                         users_processed += len(updates_to_run)
-            
+
             await asyncio.sleep(0.05)
-        
+
         await db.set_setting('demurrage_last_run', date.today().isoformat())
-        
+
         if users_processed > 0:
             logger.info(f"Demurrage successfully processed for {users_processed} users. Total amount: {format_amount(total_demurrage)} {CURRENCY_SYMBOL}.")
         else:
             logger.info("No users with positive balance found. Demurrage process finished.")
-            
+
     except Exception as e:
         logger.error(f"An error occurred during demurrage process. Error: {e}", exc_info=True)
 

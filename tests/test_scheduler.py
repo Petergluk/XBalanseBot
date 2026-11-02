@@ -24,7 +24,7 @@ class TestProcessEventPayments:
         """События с нулевой стоимостью не должны инициировать списания."""
         mock_next_run.return_value = datetime.now(ZoneInfo("Europe/Moscow"))
         mock_get_participants.return_value = [{'id': 10, 'telegram_id': 1001, 'balance': Decimal('100')}]
-        
+
         event = {
             'id': 1, 'name': 'Free Yoga', 'activity_name': None,
             'cost': 0, 'event_type': 'single', 'link': 'http'
@@ -46,7 +46,7 @@ class TestProcessEventPayments:
             {'id': 10, 'telegram_id': 1001, 'balance': Decimal('100')},
             {'id': 11, 'telegram_id': 1002, 'balance': Decimal('50')}
         ]
-        
+
         event = {
             'id': 1, 'name': 'Paid Yoga', 'activity_name': None,
             'cost': Decimal('10'), 'event_type': 'single', 'link': 'http'
@@ -54,44 +54,44 @@ class TestProcessEventPayments:
         bot_mock = AsyncMock()
 
         from contextlib import asynccontextmanager
-        
+
         mock_conn = MagicMock()
         mock_conn.execute = AsyncMock()
         mock_tx = MagicMock()
-        
+
         mock_cur = MagicMock()
         mock_cur.execute = AsyncMock()
         mock_cur.fetchone = AsyncMock(side_effect=[
             {'balance': Decimal('100'), 'grace_credit_used': False},
             {'balance': Decimal('50'), 'grace_credit_used': False}
         ])
-        
+
         @asynccontextmanager
         async def mock_cur_ctx(*args, **kwargs):
             yield mock_cur
-            
+
         @asynccontextmanager
         async def mock_tx_ctx(*args, **kwargs):
             yield mock_tx
-            
+
         @asynccontextmanager
         async def mock_conn_ctx(*args, **kwargs):
             yield mock_conn
 
         mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
         mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
-        
+
         mock_db = MagicMock()
         mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
 
         with patch("app.services.scheduler_jobs.db", mock_db):
             await handle_payment_for_event(bot_mock, event)
-            
+
             # 3 запроса (списать с юзера, добавить транзакцию, обновить кол-во транз) * 2 юзера = 6 вызовов
             assert mock_conn.execute.call_count == 6
             # Бот должен был отправить два сообщения
             assert bot_mock.send_message.call_count == 2
-            
+
             # Проверки первого execute (списание 10 монет)
             call_args = mock_conn.execute.call_args_list[0][0]
             assert "UPDATE users SET balance = balance - %s" in call_args[0]
@@ -106,7 +106,7 @@ class TestProcessEventPayments:
         mock_get_participants.return_value = [
             {'id': 12, 'telegram_id': 1003, 'balance': Decimal('5')}
         ]
-        
+
         event = {
             'id': 1, 'name': 'Paid Yoga', 'activity_name': None,
             'cost': Decimal('10'), 'event_type': 'single', 'link': 'http'
@@ -114,11 +114,11 @@ class TestProcessEventPayments:
         bot_mock = AsyncMock()
 
         from contextlib import asynccontextmanager
-        
+
         mock_conn = MagicMock()
         mock_conn.execute = AsyncMock()
         mock_tx = MagicMock()
-        
+
         mock_cur = MagicMock()
         mock_cur.execute = AsyncMock()
         mock_cur.fetchone = AsyncMock(return_value={'balance': Decimal('5'), 'grace_credit_used': False})
@@ -126,27 +126,27 @@ class TestProcessEventPayments:
         @asynccontextmanager
         async def mock_cur_ctx(*args, **kwargs):
             yield mock_cur
-            
+
         @asynccontextmanager
         async def mock_tx_ctx(*args, **kwargs):
             yield mock_tx
-            
+
         @asynccontextmanager
         async def mock_conn_ctx(*args, **kwargs):
             yield mock_conn
 
         mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
         mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
-        
+
         mock_db = MagicMock()
         mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
 
         with patch("app.services.scheduler_jobs.db", mock_db):
             await handle_payment_for_event(bot_mock, event)
-            
+
             # В бд списание не делается
             assert mock_conn.execute.call_count == 0
-            
+
             # Бот должен отправить сообщение с кнопкой кредита
             assert bot_mock.send_message.call_count == 1
             call_args, call_kwargs = bot_mock.send_message.call_args
@@ -164,7 +164,7 @@ class TestProcessEventPayments:
         mock_get_participants.return_value = [
             {'id': 13, 'telegram_id': 1004, 'balance': Decimal('5')}
         ]
-        
+
         event = {
             'id': 1, 'name': 'Paid Yoga', 'activity_name': None,
             'cost': Decimal('10'), 'event_type': 'single', 'link': 'http'
@@ -172,11 +172,11 @@ class TestProcessEventPayments:
         bot_mock = AsyncMock()
 
         from contextlib import asynccontextmanager
-        
+
         mock_conn = MagicMock()
         mock_conn.execute = AsyncMock()
         mock_tx = MagicMock()
-        
+
         mock_cur = MagicMock()
         mock_cur.execute = AsyncMock()
         mock_cur.fetchone = AsyncMock(return_value={'balance': Decimal('5'), 'grace_credit_used': True})
@@ -184,27 +184,27 @@ class TestProcessEventPayments:
         @asynccontextmanager
         async def mock_cur_ctx(*args, **kwargs):
             yield mock_cur
-            
+
         @asynccontextmanager
         async def mock_tx_ctx(*args, **kwargs):
             yield mock_tx
-            
+
         @asynccontextmanager
         async def mock_conn_ctx(*args, **kwargs):
             yield mock_conn
 
         mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
         mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
-        
+
         mock_db = MagicMock()
         mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
 
         with patch("app.services.scheduler_jobs.db", mock_db):
             await handle_payment_for_event(bot_mock, event)
-            
+
             # В бд списание не делается
             assert mock_conn.execute.call_count == 0
-            
+
             # Бот должен отправить сообщение о приостановке
             assert bot_mock.send_message.call_count == 1
             call_args, call_kwargs = bot_mock.send_message.call_args
@@ -224,10 +224,10 @@ class TestProcessDemurrage:
         bot_mock = AsyncMock()
         mock_db = MagicMock()
         mock_db.get_setting = AsyncMock(return_value='0') # demurrage_enabled = 0
-        
+
         with patch("app.services.scheduler_jobs.db", mock_db):
             await process_demurrage(bot_mock)
-            
+
             assert mock_db.get_setting.call_count == 1 # Только запрос demurrage_enabled
             assert mock_db.pool.connection.call_count == 0
 
@@ -236,18 +236,18 @@ class TestProcessDemurrage:
         """Демерредж пропускается, если не прошел интервал дней."""
         bot_mock = AsyncMock()
         mock_db = MagicMock()
-        
+
         def mock_get_setting(key, default):
             if key == 'demurrage_enabled': return '1'
             if key == 'demurrage_interval_days': return '7'
             if key == 'demurrage_last_run': return date.today().isoformat() # Сегодня уже запускался
             return default
-            
+
         mock_db.get_setting = AsyncMock(side_effect=mock_get_setting)
-        
+
         with patch("app.services.scheduler_jobs.db", mock_db):
             await process_demurrage(bot_mock)
-            
+
             # Соединение к БД с транзакциями открываться не должно
             assert mock_db.pool.connection.call_count == 0
 
@@ -256,16 +256,16 @@ class TestProcessDemurrage:
         """Демерредж пропускается, если ставка 0%."""
         bot_mock = AsyncMock()
         mock_db = MagicMock()
-        
+
         def mock_get_setting(key, default):
             if key == 'demurrage_enabled': return '1'
             if key == 'demurrage_interval_days': return '1'
             if key == 'demurrage_last_run': return "2020-01-01" # Запускался давно
             if key == 'demurrage_rate': return "0.0"
             return default
-            
+
         mock_db.get_setting = AsyncMock(side_effect=mock_get_setting)
-        
+
         with patch("app.services.scheduler_jobs.db", mock_db):
             await process_demurrage(bot_mock)
             assert mock_db.pool.connection.call_count == 0
@@ -275,7 +275,7 @@ class TestProcessDemurrage:
         """Корректное начисление демерреджа и обновление даты."""
         bot_mock = AsyncMock()
         mock_db = MagicMock()
-        
+
         def mock_get_setting(key, default):
             if key == 'demurrage_enabled': return '1'
             if key == 'demurrage_interval_days': return '1'
@@ -289,31 +289,31 @@ class TestProcessDemurrage:
         ]
 
         from contextlib import asynccontextmanager
-        
+
         mock_cur = MagicMock()
         mock_cur.fetchall = AsyncMock(side_effect=[users_to_tax, []])
         mock_cur.execute = AsyncMock()
         mock_cur.executemany = AsyncMock()
-        
+
         mock_tx = MagicMock()
         mock_conn = MagicMock()
         mock_conn.execute = AsyncMock()
-        
+
         @asynccontextmanager
         async def mock_cur_ctx(*args, **kwargs):
             yield mock_cur
-            
+
         @asynccontextmanager
         async def mock_tx_ctx(*args, **kwargs):
             yield mock_tx
-            
+
         @asynccontextmanager
         async def mock_conn_ctx(*args, **kwargs):
             yield mock_conn
-            
+
         mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
         mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
-        
+
         mock_db = MagicMock()
         mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
         mock_db.get_setting = AsyncMock(side_effect=mock_get_setting)
@@ -321,14 +321,14 @@ class TestProcessDemurrage:
 
         with patch("app.services.scheduler_jobs.db", mock_db):
             await process_demurrage(bot_mock)
-            
+
             # Проверяем, что дата обновлена
             mock_db.set_setting.assert_called_once_with('demurrage_last_run', date.today().isoformat())
-            
+
             # 2 batch execute calls + 1 update fund call
             assert mock_cur.executemany.call_count == 2
             assert mock_conn.execute.call_count == 1
-            
+
             # Проверим, что фонд получил 1.5
             last_execute_args = mock_conn.execute.call_args_list[-1][0]
             assert "UPDATE users SET balance = balance + %s" in last_execute_args[0]
@@ -358,3 +358,67 @@ async def test_process_scheduled_broadcasts_from_db():
         await process_scheduled_broadcasts(bot_mock)
         mock_do_bcast.assert_called_once_with(bot_mock, 1, 100, 200, 300)
         mock_db.mark_scheduled_broadcast_status.assert_called_once_with(77, 'sent')
+
+
+class TestDualPricingEventPayments:
+    @pytest.mark.asyncio
+    @patch.object(sched_mod, '_get_final_participants', new_callable=AsyncMock)
+    @patch.object(sched_mod, 'get_next_run_time')
+    async def test_dual_pricing_subscriber_vs_single_visitor(self, mock_next_run, mock_get_participants):
+        """Подписчик платит цену по подписке (cost), а разовый участник — разовую цену (single_cost)."""
+        mock_next_run.return_value = datetime.now(ZoneInfo("Europe/Moscow"))
+        mock_get_participants.return_value = [
+            {'id': 10, 'telegram_id': 1001, 'balance': Decimal('500'), 'is_single_visitor': False},
+            {'id': 11, 'telegram_id': 1002, 'balance': Decimal('500'), 'is_single_visitor': True},
+        ]
+
+        event = {
+            'id': 1, 'name': 'Open Practice', 'activity_name': 'Lab',
+            'cost': Decimal('100'), 'single_cost': Decimal('250'),
+            'allow_manual_registration': True, 'event_type': 'single', 'link': 'https://zoom.us/j/123'
+        }
+        bot_mock = AsyncMock()
+        from contextlib import asynccontextmanager
+
+        mock_conn = MagicMock()
+        mock_conn.execute = AsyncMock()
+        mock_tx = MagicMock()
+
+        mock_cur = MagicMock()
+        mock_cur.execute = AsyncMock()
+        mock_cur.fetchone = AsyncMock(side_effect=[
+            {'balance': Decimal('500'), 'grace_credit_used': False},
+            {'balance': Decimal('500'), 'grace_credit_used': False},
+        ])
+
+        @asynccontextmanager
+        async def mock_cur_ctx(*args, **kwargs):
+            yield mock_cur
+
+        @asynccontextmanager
+        async def mock_tx_ctx(*args, **kwargs):
+            yield mock_tx
+
+        @asynccontextmanager
+        async def mock_conn_ctx(*args, **kwargs):
+            yield mock_conn
+
+        mock_conn.transaction = MagicMock(side_effect=mock_tx_ctx)
+        mock_conn.cursor = MagicMock(side_effect=mock_cur_ctx)
+
+        mock_db = MagicMock()
+        mock_db.pool.connection = MagicMock(side_effect=mock_conn_ctx)
+
+        with patch("app.services.scheduler_jobs.db", mock_db):
+            await handle_payment_for_event(bot_mock, event)
+
+            # Первое списание (подписчик id=10): 100 орфов
+            first_update = mock_conn.execute.call_args_list[0][0]
+            assert first_update[1] == (Decimal('100'), 10)
+
+            # Второе списание (разовый гость id=11, вызов №3 или №4 в зависимости от SUPER_ADMIN_ID)
+            deduction_calls = [
+                call[0][1] for call in mock_conn.execute.call_args_list
+                if "UPDATE users SET balance = balance - %s WHERE id = %s" in call[0][0]
+            ]
+            assert deduction_calls == [(Decimal('100'), 10), (Decimal('250'), 11)]

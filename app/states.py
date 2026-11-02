@@ -72,6 +72,8 @@ class EventCreationStates(StatesGroup):
     waiting_for_time = State()
     waiting_for_end_date = State()  # Дата окончания для регулярных событий
     waiting_for_cost = State()
+    waiting_for_access_mode = State()  # Выбор: только по подписке или открыто для разового участия
+    waiting_for_single_cost = State()  # Стоимость разового участия (без подписки)
     waiting_for_link = State()
     waiting_for_reminder_time = State()
     waiting_for_reminder_text = State()
@@ -89,6 +91,8 @@ class EventEditStates(StatesGroup):
     waiting_for_new_weekday = State()
     waiting_for_new_time = State()
     waiting_for_new_cost = State()
+    waiting_for_new_access_mode = State()
+    waiting_for_new_single_cost = State()
     waiting_for_new_link = State()
     waiting_for_new_reminder_time = State()
     waiting_for_new_reminder_text = State()

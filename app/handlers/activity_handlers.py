@@ -39,7 +39,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.keyboards import (
     get_activities_keyboard, confirm_delete_keyboard, get_activity_view_keyboard,
     get_event_view_keyboard, get_activity_edit_menu_keyboard, get_broadcast_confirm_keyboard,
-    get_broadcast_schedule_keyboard, get_cancel_dialog_keyboard
+    get_broadcast_schedule_keyboard, get_cancel_dialog_keyboard, get_activity_end_date_keyboard
 )
 import html
 from app.states import ActivityCreationStates, ActivityEditStates, BroadcastStates
@@ -86,7 +86,26 @@ async def show_activities_list(target: Message | CallbackQuery):
     if not activities:
         explanation_text = LEXICON_RU["msg_activities_empty"]
 
-    keyboard = await get_activities_keyboard(activities, user_subscriptions_ids, user_is_admin)
+    general_events = await db.get_events_for_activity(GENERAL_ACTIVITY_ID)
+    general_events_count = sum(
+        1
+        for e in general_events
+        if get_next_run_time(
+            e['event_type'],
+            e.get('event_date'),
+            e.get('weekday'),
+            e.get('event_time'),
+            e.get('last_run'),
+            e.get('end_date'),
+        ) is not None
+    )
+
+    keyboard = await get_activities_keyboard(
+        activities,
+        user_subscriptions_ids,
+        user_is_admin,
+        general_events_count=general_events_count,
+    )
 
     if isinstance(target, Message):
         await target.answer(explanation_text, reply_markup=keyboard, parse_mode="HTML")
@@ -117,7 +136,7 @@ async def _send_activity_details_message(target: Message | CallbackQuery, activi
     is_subscribed = await db.is_user_subscribed(user_id, activity_id)
 
     text = LEXICON_RU["msg_activity_details_header"].format(name=activity['name'], description=activity['description'] or LEXICON_RU["msg_activity_no_description"])
-    
+
     if activity_id == GENERAL_ACTIVITY_ID:
         text = LEXICON_RU["msg_activity_general_events_desc"]
 
@@ -218,12 +237,22 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
     elif event['event_type'] == 'recurring' and event['weekday'] is not None and event['event_time'] is not None:
         schedule_str = LEXICON_RU["msg_event_schedule_recurring"].format(weekdays=format_weekdays(event['weekday']), time_str=event['event_time'].strftime('%H:%M'), msk_label=MSK_LABEL, next_date_str=next_run_dt.strftime('%d.%m.%Y'))
 
+    sub_cost_str = format_amount(event['cost'])
+    allow_single = bool(event.get('allow_manual_registration'))
+    single_cost_val = event['single_cost'] if event.get('single_cost') is not None else event['cost']
+    single_cost_str = format_amount(single_cost_val)
+
+    if allow_single and event['activity_id'] != 1:
+        cost_display = f"{sub_cost_str} {CURRENCY_SYMBOL} (по подписке)\n🎟 Разовое участие (без подписки): {single_cost_str}"
+    else:
+        cost_display = sub_cost_str
+
     text_parts = [
         LEXICON_RU["msg_event_details"].format(
             event_name=event_name,
             event_description=event_description,
             schedule_str=schedule_str,
-            cost=format_amount(event['cost']),
+            cost=cost_display,
             currency_symbol=CURRENCY_SYMBOL
         )
     ]
@@ -231,12 +260,12 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
     is_subscribed_globally = await db.is_user_subscribed(user_telegram_id, event['activity_id'])
 
     keyboard = None
-    if not event['allow_manual_registration']:
-        if is_subscribed_globally:
+    if not allow_single:
+        if is_subscribed_globally or event['activity_id'] == 1:
             text_parts.append(LEXICON_RU["msg_event_subscribed_globally"])
         else:
             text_parts.append(LEXICON_RU["msg_event_needs_global_subscription"])
-            
+
         keyboard_builder = InlineKeyboardBuilder()
         if user_is_admin:
             keyboard_builder.row(
@@ -255,8 +284,21 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
         elif is_subscribed_globally:
             status = "registered_auto"
 
-        keyboard = await get_event_view_keyboard(event_id, event['activity_id'], next_run_date, status, user_is_admin)
+        if status == "registered_auto":
+            text_parts.append(f"\n<i>✅ Вы участвуете по подписке на активность (тариф: {sub_cost_str} {CURRENCY_SYMBOL}).</i>")
+        elif status == "registered_manual":
+            text_parts.append(f"\n<i>🎟 Вы записаны разово на {next_run_date.strftime('%d.%m.%Y')} (тариф: {single_cost_str} {CURRENCY_SYMBOL}).</i>")
+        elif status == "unregistered":
+            text_parts.append(f"\n<i>🎟 Событие открыто для разового посещения без подписки ({single_cost_str} {CURRENCY_SYMBOL}).</i>")
 
+        keyboard = await get_event_view_keyboard(
+            event_id,
+            event['activity_id'],
+            next_run_date,
+            status,
+            user_is_admin,
+            single_cost_str=f"{single_cost_str} {CURRENCY_SYMBOL}"
+        )
     try:
         await callback.message.edit_text("\n".join(text_parts), reply_markup=keyboard, parse_mode="HTML")
     except TelegramBadRequest as e:
@@ -319,7 +361,7 @@ async def process_activity_subscription(callback: CallbackQuery, callback_data: 
             InlineKeyboardButton(text="↩️ Вернуть подписку", callback_data=ActivityAction(action="subscribe", activity_id=activity_id).pack())
         ]])
         await callback.message.answer(
-            f"Вы успешно отписались от <b>{activity['name']}</b>.", 
+            f"Вы успешно отписались от <b>{activity['name']}</b>.",
             reply_markup=undo_kb, parse_mode="HTML"
         )
 
@@ -364,7 +406,7 @@ async def process_manual_registration(callback: CallbackQuery, callback_data: Ev
             InlineKeyboardButton(text="↩️ Вернуть регистрацию", callback_data=EventAction(action="register", event_id=event_id, target_date=event_date).pack())
         ]])
         await callback.message.answer(
-            f"Вы отменили участие в <b>{event['name'] or event['activity_name']}</b> на {event_date.strftime('%d.%m.%Y')}.", 
+            f"Вы отменили участие в <b>{event['name'] or event['activity_name']}</b> на {event_date.strftime('%d.%m.%Y')}.",
             reply_markup=undo_kb, parse_mode="HTML"
         )
 
@@ -399,35 +441,52 @@ async def process_activity_name(message: Message, state: FSMContext):
 async def process_activity_description(message: Message, state: FSMContext):
     await state.update_data(description=message.text)
     await state.set_state(ActivityCreationStates.waiting_for_end_date)
-    await message.answer(LEXICON_RU["msg_activity_ask_end_date"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
+    await message.answer(LEXICON_RU["msg_activity_ask_end_date"], reply_markup=get_activity_end_date_keyboard(), parse_mode="HTML")
+
+
+async def _finalize_activity_creation(target: Message | CallbackQuery, state: FSMContext, end_date):
+    data = await state.get_data()
+    user_id = target.from_user.id
+    msg_obj = target.message if isinstance(target, CallbackQuery) else target
+    try:
+        activity_id = await db.create_activity(data['name'], data['description'], end_date)
+        await state.clear()
+        logger.info(f"Admin {user_id} created new activity {activity_id}: {data['name']}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=LEXICON_RU["btn_activity_create_event"], callback_data=ActivityAction(action="create_event_for", activity_id=activity_id).pack())]
+        ])
+        await msg_obj.answer(LEXICON_RU["msg_activity_created"].format(activity_name=data['name']), reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Error creating activity: {e}")
+        await msg_obj.answer(LEXICON_RU["err_activity_creation_failed"].format(activity_name=data['name']))
+        await state.set_state(ActivityCreationStates.waiting_for_name)
+        await msg_obj.answer(LEXICON_RU["msg_activity_ask_name_retry"])
+
+
+@router.callback_query(ActivityAction.filter(F.action == "no_end_date"), ActivityCreationStates.waiting_for_end_date)
+async def process_activity_no_end_date(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _finalize_activity_creation(callback, state, end_date=None)
+
 
 @router.message(ActivityCreationStates.waiting_for_end_date)
 async def process_activity_end_date(message: Message, state: FSMContext):
     end_date_str = message.text.lower().strip()
     end_date = None
-    
-    if end_date_str != 'нет':
+
+    if end_date_str not in ('нет', '.', 'без ограничений'):
         normalized_date_str = end_date_str.replace(',', '.')
         try:
             end_date = datetime.strptime(normalized_date_str, "%d.%m.%Y").date()
         except ValueError:
-            await message.reply(LEXICON_RU["err_activity_invalid_date"], reply_markup=get_cancel_dialog_keyboard(), parse_mode="HTML")
+            await message.reply(LEXICON_RU["err_activity_invalid_date"], reply_markup=get_activity_end_date_keyboard(), parse_mode="HTML")
             return
 
-    data = await state.get_data()
-    try:
-        activity_id = await db.create_activity(data['name'], data['description'], end_date)
-        await state.clear()
-        logger.info(f"Admin {message.from_user.id} created new activity {activity_id}: {data['name']}")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=LEXICON_RU["btn_activity_create_event"], callback_data=ActivityAction(action="create_event_for", activity_id=activity_id).pack())]
-        ])
-        await message.answer(LEXICON_RU["msg_activity_created"].format(activity_name=data['name']), reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Error creating activity: {e}")
-        await message.reply(LEXICON_RU["err_activity_creation_failed"].format(activity_name=data['name']))
-        await state.set_state(ActivityCreationStates.waiting_for_name)
-        await message.answer(LEXICON_RU["msg_activity_ask_name_retry"])
+    await _finalize_activity_creation(message, state, end_date=end_date)
 
 # --- ADMIN FLOW: INLINE EDIT/DELETE ACTIVITY ---
 
@@ -473,7 +532,7 @@ async def start_edit_activity_field(callback: CallbackQuery, state: FSMContext, 
     prompt_text, new_state, current_value = prompts[field]
     await state.set_state(new_state)
     await callback.message.edit_text(
-        f"{prompt_text.format(current_value=html.escape(current_value or ''))}\n\n<i>Для отмены нажмите кнопку ниже или введите /cancel</i>",
+        f"{prompt_text.format(current_value=html.escape(current_value or ''))}",
         reply_markup=get_cancel_dialog_keyboard(),
         parse_mode="HTML"
     )
@@ -547,12 +606,12 @@ async def _do_broadcast(bot, activity_id: int, source_chat_id: int, source_messa
         recipients = await db.get_activity_subscribers(activity_id)
 
     total = len(recipients)
-    
+
     status_msg = await bot.send_message(
         chat_id=admin_chat_id,
         text=f"🔄 Запуск рассылки для {total} пользователей..."
     )
-    
+
     success = 0
     for user in recipients:
         telegram_id = user.get('telegram_id')

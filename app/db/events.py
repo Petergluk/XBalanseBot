@@ -14,7 +14,8 @@ class EventRepository(BaseRepository):
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("""
-                    SELECT e.*, a.name as activity_name, a.description as activity_description
+                    SELECT e.*, a.name as activity_name, a.description as activity_description,
+                           COALESCE(e.allow_manual_registration, a.allow_manual_registration, FALSE) as allow_manual_registration
                     FROM events e JOIN activities a ON e.activity_id = a.id
                     WHERE e.is_active = TRUE
                 """)
@@ -24,7 +25,8 @@ class EventRepository(BaseRepository):
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute("""
-                    SELECT e.*, a.name as activity_name, a.description as activity_description, a.allow_manual_registration
+                    SELECT e.*, a.name as activity_name, a.description as activity_description,
+                           COALESCE(e.allow_manual_registration, a.allow_manual_registration, FALSE) as allow_manual_registration
                     FROM events e JOIN activities a ON e.activity_id = a.id
                     WHERE e.id = %s
                 """, (event_id,))
@@ -41,14 +43,15 @@ class EventRepository(BaseRepository):
 
     async def create_event(self, **kwargs) -> int:
         valid_columns = {
-            'activity_id', 'name', 'description', 'event_type', 'cost', 
-            'link', 'reminder_time', 'reminder_text', 'created_by', 
+            'activity_id', 'name', 'description', 'event_type', 'cost',
+            'allow_manual_registration', 'single_cost',
+            'link', 'reminder_time', 'reminder_text', 'created_by',
             'event_date', 'weekday', 'event_time', 'end_date', 'last_run', 'is_active'
         }
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_columns}
         if not filtered_kwargs:
             return 0
-            
+
         async with self.pool.connection() as conn:
             async with conn.cursor() as cur:
                 columns = ', '.join(filtered_kwargs.keys())
@@ -60,8 +63,9 @@ class EventRepository(BaseRepository):
 
     async def update_event(self, event_id: int, **kwargs):
         valid_columns = {
-            'activity_id', 'name', 'description', 'event_type', 'cost', 
-            'link', 'reminder_time', 'reminder_text', 'created_by', 
+            'activity_id', 'name', 'description', 'event_type', 'cost',
+            'allow_manual_registration', 'single_cost',
+            'link', 'reminder_time', 'reminder_text', 'created_by',
             'event_date', 'weekday', 'event_time', 'end_date', 'last_run', 'is_active'
         }
         async with self.pool.connection() as conn:

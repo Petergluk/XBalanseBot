@@ -128,8 +128,9 @@ async def _change_balance(
 
 @router.message(Command("gide", "гид", ignore_case=True))
 async def cmd_gide(message: Message):
-    gide_text = LEXICON_RU["gide_text"].format(currency_symbol=CURRENCY_SYMBOL)
-    await message.answer(gide_text, parse_mode="HTML")
+    from app.keyboards import get_admin_help_keyboard
+    gide_text = LEXICON_RU.get("help_admin_main", LEXICON_RU["gide_text"]).format(currency_symbol=CURRENCY_SYMBOL)
+    await message.answer(gide_text, reply_markup=get_admin_help_keyboard("help_admin_main"), parse_mode="HTML")
 
 @router.message(Command("test", ignore_case=True))
 async def cmd_test(message: Message):
@@ -142,7 +143,7 @@ async def cmd_reset(message: Message):
     if len(args) < 2:
         await message.reply(LEXICON_RU["err_admin_reset_format"], parse_mode="HTML")
         return
-    
+
     target_arg = args[1]
     user = None
     if target_arg.isdigit():
@@ -150,7 +151,7 @@ async def cmd_reset(message: Message):
     else:
         username = target_arg.lstrip('@').lower()
         user = await db.get_user(username=username)
-        
+
     if not user:
         await message.reply(LEXICON_RU["err_admin_reset_not_found"].format(target=escape(target_arg)), parse_mode="HTML")
         return
@@ -170,7 +171,7 @@ async def cmd_reset(message: Message):
 
     user_balance = Decimal(str(user['balance'] or 0))
     new_treasury_balance = None
-    
+
     async with db.pool.connection() as conn:
         async with conn.transaction():
             # 1. Возвращаем остаток баланса в Игровую казну, чтобы сохранить нулевую сумму (Σ = 0)
@@ -190,13 +191,13 @@ async def cmd_reset(message: Message):
                 "DELETE FROM transactions WHERE from_user_id = %s OR to_user_id = %s",
                 (user_id, user_id)
             )
-            
+
             # 3. Удаляем логи наград по хэштегам
             await conn.execute(
                 "DELETE FROM tag_rewards_log WHERE user_telegram_id = %s",
                 (telegram_id,)
             )
-            
+
             # 4. Удаляем самого пользователя (зависимые записи в подписках, оверайдах и офферах удалятся каскадно)
             await conn.execute(
                 "DELETE FROM users WHERE id = %s",
@@ -221,7 +222,7 @@ async def cmd_reset(message: Message):
             balance=format_amount(new_treasury_balance),
             currency_symbol=CURRENCY_SYMBOL
         )
-            
+
     await message.reply(
         LEXICON_RU["msg_admin_reset_success"].format(
             username_str=username_str,
@@ -278,32 +279,32 @@ async def cmd_users(message: Message):
     if total_users == 0:
         await loading_msg.edit_text(LEXICON_RU["msg_admin_no_users"])
         return
-        
+
     page_size = 20
     total_pages = (total_users + page_size - 1) // page_size
-    
+
     args = message.text.split()
     page = 1
     if len(args) > 1 and args[1].isdigit():
         page = int(args[1])
         if page < 1: page = 1
         elif page > total_pages: page = total_pages
-        
+
     offset = (page - 1) * page_size
     users_page = await db.get_users_page(limit=page_size, offset=offset)
-    
+
     response_parts = [LEXICON_RU["msg_admin_users_header"].format(total_users=total_users)]
     for i, user in enumerate(users_page):
         admin_mark = "👮" if user['is_admin'] else ""
         username_str = f"@{user['username']}" if user['username'] else f"ID:{user['telegram_id']}"
         response_parts.append(LEXICON_RU["msg_admin_user_row"].format(index=offset+i+1, admin_mark=admin_mark, username=username_str, balance=format_amount(user['balance']), currency_symbol=CURRENCY_SYMBOL))
-        
+
     if total_pages > 1:
         if page < total_pages:
             response_parts.append(f"\n📄 Страница {page}/{total_pages}. Для следующей: <code>/users {page + 1}</code>")
         else:
             response_parts.append(f"\n📄 Страница {page}/{total_pages}.")
-            
+
     await loading_msg.edit_text("".join(response_parts), parse_mode="HTML")
 
 
@@ -449,9 +450,9 @@ async def cmd_settings(message: Message, state: FSMContext = None):
 @router.callback_query(SettingsAction.filter())
 async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext, callback_data: SettingsAction):
     action = callback_data.action
-    
+
     from app.lexicon import LEXICON_RU
-    
+
     prompts = {
         "set_welcome_bonus": (LEXICON_RU["msg_admin_prompt_set_welcome_bonus"], 'welcome_bonus_amount', '1500', AdminEditStates.waiting_for_welcome_bonus),
         "set_exchange_rate": (LEXICON_RU["msg_admin_prompt_set_exchange_rate"], 'exchange_rate', '1.0', AdminEditStates.waiting_for_exchange_rate),
@@ -462,7 +463,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         "edit_activities_desc": (LEXICON_RU["msg_admin_prompt_edit_activities_desc"], 'activities_description', LEXICON_RU["msg_activities_default_desc"], AdminEditStates.waiting_for_activities_description),
         "edit_bonus_message": (LEXICON_RU["msg_admin_prompt_edit_bonus_message"], 'welcome_bonus_message', LEXICON_RU["default_welcome_bonus"], AdminEditStates.waiting_for_welcome_bonus_text)
     }
-    
+
     variable_tooltips = {
         "edit_welcome_bot": ["{username}"],
         "edit_welcome_group": ["{username}", "{bot_username}"],
@@ -470,7 +471,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         "edit_activities_desc": ["{username}"],
         "edit_bonus_message": ["{username}", "{amount}", "{currency_symbol}"]
     }
-    
+
     if action in prompts:
         desc, db_key, default_val, new_state = prompts[action]
         current_val = str(await db.get_setting(db_key, default_val))
@@ -491,9 +492,9 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         if action in variable_tooltips:
             tips = " ".join([f"{t}" for t in variable_tooltips[action]])
             prompt_text += LEXICON_RU["msg_admin_prompt_variables"].format(tips=tips)
-        
+
         await state.set_state(new_state)
-        
+
         # Специальная клавиатура для бонуса с кнопкой редактирования текста
         if action == "set_welcome_bonus":
             from app.keyboards import get_welcome_bonus_setting_keyboard
@@ -504,7 +505,7 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
             kb = get_welcome_group_prompt_keyboard(enabled, setting_action=action)
         else:
             kb = get_back_to_settings_keyboard(setting_action=action)
-            
+
         await callback.message.edit_text(prompt_text, reply_markup=kb, parse_mode="HTML")
         await callback.answer()
     elif action == "menu_demurrage":
@@ -515,12 +516,12 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         interval = await db.get_setting('demurrage_interval_days')
         last_run = await db.get_setting('demurrage_last_run')
         status_text = LEXICON_RU["msg_admin_demurrage_status"].format(enabled=enabled_str, rate=rate, interval=interval, last_run=last_run)
-        
+
         from app.keyboards import get_demurrage_settings_keyboard
         kb = await get_demurrage_settings_keyboard(enabled)
         await callback.message.edit_text(status_text, reply_markup=kb, parse_mode="HTML")
         await callback.answer()
-        
+
     elif action == "menu_tag_rules":
         from app.handlers.admin_commands import cmd_list_tag_rules
         await cmd_list_tag_rules(callback)
@@ -533,6 +534,10 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         from app.keyboards import get_topics_settings_keyboard
         kb = get_topics_settings_keyboard()
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        try:
+            await db.set_setting("admin_topics_msg_ref", f"{callback.message.chat.id}:{callback.message.message_id}")
+        except Exception:
+            pass
         await callback.answer()
 
     elif action == "menu_bonus_source" or action.startswith("set_bonus_source_"):
@@ -581,17 +586,17 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
     elif action == "toggle_demurrage":
         is_on = callback_data.enabled
         await db.set_setting('demurrage_enabled', '1' if is_on else '0')
-        
+
         enabled_str = "Включен" if is_on else "Выключен"
         rate = float(await db.get_setting('demurrage_rate', '1.0'))
         interval = await db.get_setting('demurrage_interval_days')
         last_run = await db.get_setting('demurrage_last_run')
         status_text = LEXICON_RU["msg_admin_demurrage_status"].format(enabled=enabled_str, rate=rate, interval=interval, last_run=last_run)
-        
+
         from app.keyboards import get_demurrage_settings_keyboard
         new_keyboard = await get_demurrage_settings_keyboard(is_on)
         await callback.message.edit_text(status_text, reply_markup=new_keyboard, parse_mode="HTML")
-        
+
         status_msg = 'ВКЛЮЧЕН' if is_on else 'ВЫКЛЮЧЕН'
         await callback.answer(LEXICON_RU["msg_admin_demurrage_toggled"].format(status=status_msg))
     elif action == "toggle_welcome_group":
@@ -779,12 +784,12 @@ async def cmd_get_thread_id(message: Message):
 async def cmd_list_tag_rules(target: Message | CallbackQuery):
     """Показывает все правила начисления по хэштегам."""
     rules = await db.get_all_tag_rules()
-    
+
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     from aiogram.types import InlineKeyboardButton
     from app.callbacks import SettingsAction
     builder = InlineKeyboardBuilder()
-    
+
     if not rules:
         text = LEXICON_RU["msg_tag_rules_list_empty"]
         builder.row(InlineKeyboardButton(text="➕ Добавить правило", callback_data="add_tag_rule_btn"))
@@ -794,7 +799,7 @@ async def cmd_list_tag_rules(target: Message | CallbackQuery):
         elif isinstance(target, CallbackQuery):
             await target.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
         return
-        
+
     text = LEXICON_RU["msg_tag_rules_list_header"]
     for rule in rules:
         if rule['limit_amount']:
@@ -815,14 +820,14 @@ async def cmd_list_tag_rules(target: Message | CallbackQuery):
             reward=rule['reward'], currency_symbol=CURRENCY_SYMBOL,
             limit_str=limit_str, thread_str=thread_str, rule_id=rule['id']
         ) + status
-    
+
     # Добавляем кнопки удаления для каждого правила
     for rule in rules:
         builder.row(InlineKeyboardButton(text=f"🗑 Удалить #{rule['hashtag']}", callback_data=f"del_tag_rule_{rule['id']}"))
-        
+
     builder.row(InlineKeyboardButton(text="➕ Добавить правило", callback_data="add_tag_rule_btn"))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=SettingsAction(action="back_to_settings").pack()))
-    
+
     if isinstance(target, Message):
         await target.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
     elif isinstance(target, CallbackQuery):
@@ -843,13 +848,13 @@ async def process_del_tag_rule(callback: CallbackQuery):
     if not rule:
         await callback.answer(LEXICON_RU["err_tag_rule_not_found"], show_alert=True)
         return
-        
+
     await db.delete_tag_rule(rule_id)
     from app.handlers.tag_reward_handler import invalidate_tag_rules_cache
     await invalidate_tag_rules_cache()
     logger.info(f"Admin {callback.from_user.id} deleted tag rule {rule_id} (#{rule['hashtag']})")
     await callback.answer(LEXICON_RU["msg_tag_rule_deleted"].format(rule_id=rule_id))
-    
+
     # Обновляем список
     await cmd_list_tag_rules(callback)
 
@@ -858,8 +863,8 @@ async def process_del_tag_rule(callback: CallbackQuery):
 async def cmd_add_tag_rule_start(message: Message, state: FSMContext):
     """Запускает FSM создания правила."""
     await state.set_state(TagRuleCreationStates.waiting_for_hashtag)
-    # Удаляем обычную клавиатуру, если она застряла (ReplyKeyboardRemove), 
-    # а инлайн отправляем через edit_text ниже, но так как это старт, мы просто 
+    # Удаляем обычную клавиатуру, если она застряла (ReplyKeyboardRemove),
+    # а инлайн отправляем через edit_text ниже, но так как это старт, мы просто
     # шлем отдельное сообщение с удалением, а затем сам вопрос.
     from aiogram.types import ReplyKeyboardRemove
     temp_msg = await message.answer("Запускаю процесс создания...", reply_markup=ReplyKeyboardRemove())
@@ -932,7 +937,7 @@ async def tag_rule_get_limit_amount(message: Message, state: FSMContext):
         return
     limit_amount = int(message.text.strip())
     await state.update_data(limit_amount=limit_amount)
-    
+
     if limit_amount == 0:
         # Если лимита нет, то и период не важен
         await state.update_data(limit_period_days=0)
@@ -1074,19 +1079,69 @@ async def _finish_tag_rule(message, state: FSMContext, reaction: str):
     )
 
 
+async def _auto_delete_message(msg, delay_sec: float = 5.0):
+    import asyncio
+    await asyncio.sleep(delay_sec)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
 @router.message(Command("set_market_thread"))
 async def cmd_set_market_thread(message: Message):
     if message.chat.type not in ["group", "supergroup"]:
         await message.reply("❌ Эту команду нужно вызывать в группе/супергруппе в нужном топике.")
         return
-    
+
     thread_id = message.message_thread_id
+    # 1. Сразу удаляем саму команду из топика, чтобы не засорять чат
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     if thread_id is None:
         await db.set_setting("market_thread_id", "0")
-        await message.reply("✅ Топик для биржи обмена сброшен. Объявления будут публиковаться в общий чат.")
+        topic_status = "Общий чат (General)"
+        notice_text = "✅ Привязка сброшена: объявления Игромаркета будут публиковаться в общий чат.\n<i>(Сообщение удалится через 5 сек.)</i>"
     else:
         await db.set_setting("market_thread_id", str(thread_id))
-        await message.reply(f"✅ Топик для биржи обмена успешно установлен (ID темы: {thread_id}). Все новые объявления будут публиковаться сюда.")
+        topic_status = f"ID {thread_id} (привязан ✅)"
+        notice_text = f"✅ Топик Игромаркета успешно привязан (ID темы: <code>{thread_id}</code>).\n<i>(Сообщение удалится через 5 сек.)</i>"
+
+    # 2. Показываем исчезающее через 5 секунд уведомление в топике
+    try:
+        sent_notice = await message.bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=thread_id,
+            text=notice_text,
+            parse_mode="HTML",
+        )
+        import asyncio
+        asyncio.create_task(_auto_delete_message(sent_notice, 5.0))
+    except Exception:
+        pass
+
+    # 3. Автоматически обновляем открытое окно «Привязка топика Игромаркета» в ЛС с ботом
+    try:
+        ref = await db.get_setting("admin_topics_msg_ref", "")
+        if ref and ":" in ref:
+            ref_chat_id_str, ref_msg_id_str = ref.split(":", 1)
+            from app.keyboards import get_topics_settings_keyboard
+            updated_text = (
+                LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
+                + f"\n\n✅ <b>Обновлено только что:</b> привязан <b>{topic_status}</b>."
+            )
+            await message.bot.edit_message_text(
+                chat_id=int(ref_chat_id_str),
+                message_id=int(ref_msg_id_str),
+                text=updated_text,
+                reply_markup=get_topics_settings_keyboard(),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.debug(f"Could not auto-update admin topics message in DM: {e}")
 
 
 @router.message(Command("status", ignore_case=True))

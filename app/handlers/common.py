@@ -60,7 +60,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
             await message.bot.delete_messages(chat_id=message.chat.id, message_ids=message_ids)
         except Exception as e:
             logger.warning(f"Could not delete messages in cancel dialog: {e}")
-    
+
     await state.clear()
     await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
     if message.chat.type == 'private':
@@ -241,36 +241,39 @@ async def cmd_help(message: Message):
     Показывает разную справку в зависимости от типа чата и прав пользователя.
     """
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
-    
+
     if message.chat.type in ('group', 'supergroup'):
         help_text = LEXICON_RU["help_group"]
         bot_info = await message.bot.get_me()
         help_text = help_text.format(bot_username=bot_info.username, currency_symbol=CURRENCY_SYMBOL)
         await message.answer(help_text, parse_mode="HTML")
     else:
-        help_text = LEXICON_RU["help_user"].format(currency_symbol=CURRENCY_SYMBOL)
-        if await is_admin(message.from_user.id):
-            help_text += LEXICON_RU["help_admin_addon"]
-        from app.keyboards import get_back_to_menu_keyboard
-        await message.answer(help_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+        user_is_admin = await is_admin(message.from_user.id)
+        help_text = LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]).format(currency_symbol=CURRENCY_SYMBOL)
+        from app.keyboards import get_user_help_keyboard
+        await message.answer(
+            help_text,
+            reply_markup=get_user_help_keyboard("help_user_main", is_admin=user_is_admin),
+            parse_mode="HTML"
+        )
 
 @router.chat_member(ChatMemberUpdatedFilter(JOIN_TRANSITION))
 async def on_user_join(event: ChatMemberUpdated, bot: Bot):
     """Обработка вступления нового участника в группу."""
     logger.info(f"User {event.new_chat_member.user.id} joined chat {event.chat.id}")
-    
+
     if str(event.chat.id) != str(MAIN_GROUP_ID):
         return
-    
+
     new_member = event.new_chat_member.user
     if new_member.is_bot:
         logger.info(f"A bot named {new_member.full_name} ({new_member.id}) joined the main group. Ignoring.")
         return
 
     logger.info(f"User {new_member.full_name} ({new_member.id}) joined the main group")
-    
+
     await ensure_user_exists(new_member.id, new_member.username, new_member.is_bot)
-    
+
     credited = Decimal('0')
     try:
         credited = await _credit_welcome_bonus(new_member.id, "Велком-бонус за вступление по приглашению")

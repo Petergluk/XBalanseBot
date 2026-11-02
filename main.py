@@ -103,14 +103,14 @@ def make_throttling_middleware(storage):
         user = data.get('event_from_user')
         if not user:
             return await handler(event, data)
-            
+
         redis = storage.redis
         user_id = user.id
-        
+
         is_command = False
         if isinstance(event, Message):
             is_command = event.text and event.text.startswith('/')
-            
+
         if is_command or isinstance(event, CallbackQuery):
             key = f"throttle:{user_id}"
             is_allowed = await redis.set(key, 1, px=500, nx=True)
@@ -120,7 +120,7 @@ def make_throttling_middleware(storage):
                 elif isinstance(event, CallbackQuery):
                     await event.answer("⚠️ Слишком быстро! Подождите...", show_alert=True)
                 return
-                
+
         return await handler(event, data)
     return throttling_middleware
 
@@ -135,7 +135,7 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
             if event.text and event.text.startswith('/'):
                 parts = event.text.split()
                 command = parts[0].lower().split('@')[0]
-                
+
                 private_commands = {
                     "/menu", "/balance", "/баланс", "/history", "/settings",
                     "/users", "/check", "/rem", "/make_admin", "/remove_admin",
@@ -144,14 +144,14 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     "/join", "/link", "/offer", "/create_offer", "/reset", "/rebalance",
                     "/pay_from_fund", "/fund", "/fund_pay", "/cancel_broadcast", "/status", "/cancel"
                 }
-                
+
                 if command in private_commands:
                     bot_info = await event.bot.get_me()
                     await event.reply(
                         f"❌ Эта команда доступна только в личных сообщениях со мной: @{bot_info.username}"
                     )
                     return
-                
+
                 if command in ("/send", "/add") and len(parts) < 3:
                     await event.reply(
                         "❌ В группе поддерживается только быстрый перевод:\n"
@@ -235,10 +235,10 @@ async def setup_bot_commands(bot: Bot):
     # Команды для личных сообщений с ботом (минималистичное меню без терминальной перегрузки)
     user_commands = [
         BotCommand(command="menu", description="🤖 Главное меню"),
-        BotCommand(command="help", description="📖 Справка"),
     ]
     # Команды, которые реально работают внутри группового чата
     group_commands = [
+        BotCommand(command="donate", description="💝 Поблагодарить автора поста орфами"),
         BotCommand(command="send", description="💸 Быстрый перевод (@user сумма)"),
         BotCommand(command="gdp", description="📊 Экономика сообщества"),
         BotCommand(command="help", description="📖 Справка по командам в группе"),
@@ -251,19 +251,29 @@ async def setup_bot_commands(bot: Bot):
         logger.warning(f"Could not set scoped commands: {e}")
     logger.info(f"Bot commands set: {len(user_commands)} private commands, {len(group_commands)} group commands.")
 
-    # Расширенные команды для супер-админа
+    # Расширенные команды для всех администраторов и супер-админа
+    admin_commands = [
+        BotCommand(command="menu", description="🤖 Главное меню"),
+        BotCommand(command="settings", description="⚙️ Настройки бота"),
+        BotCommand(command="status", description="🩺 Статус системы"),
+        BotCommand(command="gide", description="🔐 Гид администратора"),
+        BotCommand(command="help", description="📖 Справка"),
+    ]
+    admin_ids = set()
     if SUPER_ADMIN_ID:
-        admin_commands = [
-            BotCommand(command="menu", description="🤖 Главное меню"),
-            BotCommand(command="settings", description="⚙️ Настройки бота"),
-            BotCommand(command="status", description="🩺 Статус системы"),
-            BotCommand(command="help", description="📖 Справка"),
-        ]
+        admin_ids.add(int(SUPER_ADMIN_ID))
+    try:
+        all_users = await db.get_all_users()
+        for u in all_users:
+            if u.get("is_admin") and u.get("telegram_id"):
+                admin_ids.add(int(u["telegram_id"]))
+    except Exception:
+        pass
+    for adm_id in admin_ids:
         try:
-            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=SUPER_ADMIN_ID))
-            logger.info(f"Admin commands set for super admin {SUPER_ADMIN_ID}: {len(admin_commands)} commands.")
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=adm_id))
         except Exception as e:
-            logger.warning(f"Could not set admin commands for {SUPER_ADMIN_ID}: {e}")
+            logger.warning(f"Could not set admin commands for {adm_id}: {e}")
 
 
 async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
@@ -296,7 +306,7 @@ async def main():
 
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-    
+
     redis_url = REDIS_URL if REDIS_URL else f"redis://{REDIS_HOST}:6379/0"
     storage = RedisStorage.from_url(redis_url, key_builder=DefaultKeyBuilder(with_destiny=True))
     dp = Dispatcher(storage=storage, scheduler=scheduler)

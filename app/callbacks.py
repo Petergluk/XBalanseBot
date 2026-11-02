@@ -68,7 +68,7 @@ class EventEditAction(CallbackData, prefix="evt_edit"):
     """
     action: str
     event_id: int
-    
+
 class EventCreationAction(CallbackData, prefix="evt_create"):
     """
     Колбэк для шагов FSM при создании события.
@@ -80,6 +80,7 @@ class EventCreationAction(CallbackData, prefix="evt_create"):
     activity_id: Optional[int] = None # Используется при выборе активности или создании события для конкретной активности
     event_type: Optional[str] = None # Используется при установке типа события
     weekday: Optional[int] = None # Используется при выборе и переключении дня недели
+    allow_single: Optional[int] = None # 0 = только по подписке, 1 = открыто для разового участия
 
 class SettingsAction(CallbackData, prefix="set"):
     """
@@ -122,3 +123,22 @@ class GraceCreditAction(CallbackData, prefix="grace"):
     Колбэк для получения кредита доверия для оплаты конкретного события.
     """
     event_id: int
+
+
+class HelpAction(CallbackData, prefix="hlp"):
+    """
+    Колбэк для переключения разделов модульной справки (/help и /gide).
+    """
+    section: str
+
+
+class DonateAction(CallbackData, prefix="don"):
+    """
+    Колбэк для благодарности (доната орфами) автору поста в группе.
+    `action`: 'start' (нажать «💝 Поблагодарить»), 'cancel' (отменить ввод суммы)
+    `author_id`: Telegram ID автора поста (или отправителя при cancel)
+    `post_id`: ID сообщения-поста в группе
+    """
+    action: str
+    author_id: int
+    post_id: int = 0

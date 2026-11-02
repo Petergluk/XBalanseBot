@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class ConnectionManager(BaseRepository):
     """Класс для управления подключением и инициализации структуры базы данных."""
-    
+
     async def initialize(self, max_retries: int = 5):
         """Инициализирует пул соединений и структуру базы данных с повторными попытками."""
         logger.info("Initializing database connection pool...")
@@ -47,6 +47,13 @@ class ConnectionManager(BaseRepository):
                     INSERT INTO activities (id, name, description, is_active)
                     VALUES (1, 'Общие события', 'Это открытые встречи и общесистемные события, на которые автоматически подписаны все участники сообщества.', TRUE)
                     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, is_active = EXCLUDED.is_active
+                """)
+
+                # Автоматическая миграция для открытых событий и двойной цены (по подписке / разово)
+                await cur.execute("""
+                    ALTER TABLE events
+                    ADD COLUMN IF NOT EXISTS allow_manual_registration BOOLEAN NOT NULL DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS single_cost NUMERIC(12, 2) DEFAULT NULL
                 """)
 
                 # Синхронизация sequences (Гарантируем, что значение sequence >= 1)

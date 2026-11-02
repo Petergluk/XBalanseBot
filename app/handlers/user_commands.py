@@ -38,9 +38,10 @@ from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
                        get_user_balance, is_admin, validate_amount,
                        add_message_id_to_state, check_is_group_member, get_next_run_time)
-from app.callbacks import GeneralAction, TransferAction
+from app.callbacks import GeneralAction, TransferAction, HelpAction
 
 router = Router()
+_bottom_kb_role_cache: dict[int, bool] = {}
 logger = logging.getLogger(__name__)
 
 
@@ -60,7 +61,7 @@ async def _get_history_text(telegram_id: int, days: int = 30) -> str:
     current_balance = await get_user_balance(telegram_id)
     date_limit = datetime.now(ZoneInfo("Europe/Moscow")) - timedelta(days=days)
     user_db_id, all_txs = await db.get_transaction_history(telegram_id, date_limit)
-    
+
     if user_db_id is None:
         return LEXICON_RU["msg_user_not_found_profile"]
 
@@ -80,7 +81,7 @@ async def cancel_transfer_dialog(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     message_ids = add_message_id_to_state(data, message.message_id)
     await state.update_data(message_ids=message_ids)
-    
+
     await cleanup_transfer_dialog(state, bot, message.chat.id)
     await show_main_menu(message)
 
@@ -188,6 +189,22 @@ async def show_main_menu(message: Message | CallbackQuery):
 
     keyboard = get_main_menu_keyboard(is_member=is_member, invite_link=invite_link)
 
+    # Закрепляем постоянную нижнюю кнопку (1 для юзера, 4 для админа), если ещё не закреплена для этой роли
+    try:
+        user_is_admin = await is_admin(user_id)
+        if _bottom_kb_role_cache.get(user_id) is not user_is_admin:
+            from app.keyboards import get_persistent_bottom_keyboard
+            _bottom_kb_role_cache[user_id] = user_is_admin
+            await bot.send_message(
+                user_id,
+                "⌨️ <i>Быстрая кнопка меню закреплена внизу экрана.</i>",
+                reply_markup=get_persistent_bottom_keyboard(is_admin=user_is_admin),
+                parse_mode="HTML",
+                disable_notification=True,
+            )
+    except Exception as e:
+        logger.debug(f"Could not attach persistent bottom keyboard for {user_id}: {e}")
+
     if isinstance(message, Message):
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     elif isinstance(message, CallbackQuery):
@@ -203,6 +220,53 @@ async def cmd_menu(message: Message, state: FSMContext = None):
         await state.clear()
     await show_main_menu(message)
 
+
+@router.message(F.chat.type == "private", F.text == "🏠 Главное меню", StateFilter("*"))
+async def handle_bottom_btn_main_menu(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await show_main_menu(message)
+
+
+@router.message(F.chat.type == "private", F.text == "⚙️ Настройки", StateFilter("*"))
+async def handle_bottom_btn_settings(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    from app.handlers.admin_commands import cmd_settings
+    await cmd_settings(message)
+
+
+@router.message(F.chat.type == "private", F.text == "🩺 Статус", StateFilter("*"))
+async def handle_bottom_btn_status(message: Message, state: FSMContext = None, scheduler=None):
+    if state is not None:
+        await state.clear()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    from app.handlers.admin_commands import cmd_status
+    await cmd_status(message, bot=message.bot, scheduler=scheduler)
+
+
+@router.message(F.chat.type == "private", F.text == "🔐 Гид админа", StateFilter("*"))
+async def handle_bottom_btn_gide(message: Message, state: FSMContext = None):
+    if state is not None:
+        await state.clear()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    from app.handlers.admin_commands import cmd_gide
+    await cmd_gide(message)
+
 @router.callback_query(GeneralAction.filter(F.action == "main_menu"), StateFilter("*"))
 async def process_back_to_menu(callback: CallbackQuery, state: FSMContext = None):
     if state is not None:
@@ -216,11 +280,11 @@ async def process_menu_balance_history(callback: CallbackQuery):
     user = callback.from_user
     await ensure_user_exists(user.id, user.username, user.is_bot)
     balance = await get_user_balance(user.id)
-    
+
     history_text = await _get_history_text(user.id, days=30)
-    
+
     text = LEXICON_RU["msg_balance_and_history"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL, history_text=history_text)
-    
+
     try:
         await callback.message.edit_text(
             text,
@@ -247,13 +311,40 @@ async def process_menu_event(callback: CallbackQuery):
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_help"))
 async def process_menu_help(callback: CallbackQuery):
-    """Показывает справку с учётом роли пользователя."""
+    """Показывает модульную справку с учётом роли пользователя."""
     await callback.answer()
     from app.lexicon import LEXICON_RU
-    help_text = LEXICON_RU["help_user"].format(currency_symbol=CURRENCY_SYMBOL)
-    if await is_admin(callback.from_user.id):
-        help_text += LEXICON_RU["help_admin_addon"]
-    await callback.message.edit_text(help_text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+    from app.keyboards import get_user_help_keyboard
+    user_is_admin = await is_admin(callback.from_user.id)
+    help_text = LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]).format(currency_symbol=CURRENCY_SYMBOL)
+    await callback.message.edit_text(
+        help_text,
+        reply_markup=get_user_help_keyboard("help_user_main", is_admin=user_is_admin),
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(HelpAction.filter())
+async def process_help_section(callback: CallbackQuery, callback_data: HelpAction):
+    """Переключает разделы модульной справки (/help и /gide)."""
+    from app.lexicon import LEXICON_RU
+    from app.keyboards import get_user_help_keyboard, get_admin_help_keyboard
+    section_key = callback_data.section
+    user_is_admin = await is_admin(callback.from_user.id)
+    if section_key.startswith("help_admin_") and not user_is_admin:
+        await callback.answer("❌ Доступно только администраторам.", show_alert=True)
+        return
+    raw_text = LEXICON_RU.get(section_key, LEXICON_RU.get("help_user_main", ""))
+    formatted = raw_text.format(currency_symbol=CURRENCY_SYMBOL)
+    if section_key.startswith("help_admin_"):
+        kb = get_admin_help_keyboard(section_key)
+    else:
+        kb = get_user_help_keyboard(section_key, is_admin=user_is_admin)
+    try:
+        await callback.message.edit_text(formatted, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
 
 @router.callback_query(GeneralAction.filter(F.action == "menu_send"))
 async def process_menu_send(callback: CallbackQuery, state: FSMContext):
@@ -276,7 +367,7 @@ async def cmd_balance(message: Message, state: FSMContext = None):
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     balance = await get_user_balance(message.from_user.id)
     history_text = await _get_history_text(message.from_user.id, days=30)
-    
+
     text = LEXICON_RU["msg_balance_and_history"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL, history_text=history_text)
     kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
@@ -285,7 +376,7 @@ async def cmd_balance(message: Message, state: FSMContext = None):
 async def cmd_send(message: Message, state: FSMContext, bot: Bot):
     await ensure_user_exists(message.from_user.id, message.from_user.username, message.from_user.is_bot)
     args = message.text.split()
-    
+
     if len(args) >= 3:
         recipient_username = args[1].lstrip('@').lower()
         if recipient_username == (message.from_user.username or '').lower():
@@ -312,7 +403,7 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
         )
         await state.update_data(message_ids=[message.message_id, sent_message.message_id])
         return
-        
+
     await message.reply(LEXICON_RU["err_transfer_format"], parse_mode="HTML")
 
 @router.message(TransferStates.waiting_for_recipient)
@@ -340,7 +431,7 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
-    
+
     await state.update_data(recipient_id=recipient['id'], recipient_telegram_id=recipient['telegram_id'], recipient_username=recipient_username)
     await state.set_state(TransferStates.waiting_for_amount)
     sent_message = await message.answer(
@@ -354,14 +445,14 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
 async def process_amount_input(message: Message, state: FSMContext):
     data = await state.get_data()
     message_ids = add_message_id_to_state(data, message.message_id)
-    
+
     msg_text = (message.text or "").strip()
     if msg_text.lower() == "cancel" or msg_text.startswith("/"):
         await state.update_data(message_ids=message_ids)
         from app.handlers.user_commands import cancel_transfer_dialog
         await cancel_transfer_dialog(message, state, message.bot)
         return
-    
+
     try:
         amount = validate_amount(message.text)
     except ValueError:
@@ -372,7 +463,7 @@ async def process_amount_input(message: Message, state: FSMContext):
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
-        
+
     from app.config import SUPER_ADMIN_ID
     sender_balance = await get_user_balance(message.from_user.id)
     if message.from_user.id != SUPER_ADMIN_ID and sender_balance < amount:
@@ -398,26 +489,26 @@ async def process_amount_input(message: Message, state: FSMContext):
 async def process_comment_input(message: Message, state: FSMContext):
     data = await state.get_data()
     message_ids = add_message_id_to_state(data, message.message_id)
-    
+
     msg_text = (message.text or "").strip()
     if msg_text.lower() == "cancel" or msg_text.startswith("/"):
         await state.update_data(message_ids=message_ids)
         from app.handlers.user_commands import cancel_transfer_dialog
         await cancel_transfer_dialog(message, state, message.bot)
         return
-    
+
     await state.update_data(comment=message.text)
-    
+
     dialog_data = await state.get_data()
     amount = Decimal(dialog_data['amount'])
     recipient_username = dialog_data['recipient_username']
-    
+
     from html import escape
     confirmation_text = LEXICON_RU["msg_transfer_confirm"].format(
         recipient_username=recipient_username, amount=format_amount(amount),
         currency_symbol=CURRENCY_SYMBOL, comment=escape(message.text or "")
     )
-    
+
     await state.set_state(TransferStates.waiting_for_confirmation)
     sent_message = await message.answer(confirmation_text, reply_markup=get_transfer_confirmation_keyboard(), parse_mode="HTML")
     message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
@@ -447,20 +538,20 @@ async def process_transfer_cancel(callback: CallbackQuery, state: FSMContext, bo
 async def perform_transfer_and_notify(message: Message | CallbackQuery, state: FSMContext, bot: Bot, recipient: dict, amount: Decimal, comment: str, is_dialog: bool):
     sender = message.from_user
     chat_id = message.chat.id if isinstance(message, Message) else message.message.chat.id
-    
+
     if is_dialog:
         await cleanup_transfer_dialog(state, bot, chat_id)
 
     try:
         result = await db.transfer(sender.id, recipient['id'], amount, comment)
-        
+
         if not result['success']:
             if result['error'] == 'sender_not_found':
                 await bot.send_message(chat_id, LEXICON_RU["err_sender_not_found"])
             elif result['error'] == 'insufficient_funds':
                 await bot.send_message(chat_id, LEXICON_RU["err_insufficient_funds_plain"].format(balance=format_amount(result['sender_balance']), currency_symbol=CURRENCY_SYMBOL), parse_mode="HTML")
             return
-        
+
         logger.info(f"Transfer successful: {sender.id} -> {recipient['telegram_id']}, amount: {amount}")
         await db.handle_debt_repayment(recipient['id'])
 
@@ -470,7 +561,7 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
             currency_symbol=CURRENCY_SYMBOL,
             comment=escape(comment or "")
         )
-        
+
         recipient_notified = True
         if recipient['telegram_id'] != 0:
             try:
@@ -491,7 +582,7 @@ async def perform_transfer_and_notify(message: Message | CallbackQuery, state: F
 
         if not recipient_notified:
             response_text += LEXICON_RU["warning_recipient_not_notified"].format(recipient_username=recipient['username'])
-            
+
         await bot.send_message(chat_id, response_text, parse_mode="HTML")
 
     except Exception as e:
@@ -509,7 +600,7 @@ async def cmd_history(message: Message, state: FSMContext = None):
         days = int(args[1]) if len(args) > 1 else 30
     except (ValueError, IndexError):
         days = 30
-    
+
     history_text = await _get_history_text(user.id, days=days)
     kb = None if getattr(message.chat, 'type', 'private') in ('group', 'supergroup') else get_back_to_menu_keyboard()
     await message.answer(history_text, reply_markup=kb, parse_mode="HTML")

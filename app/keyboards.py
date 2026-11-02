@@ -24,7 +24,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.callbacks import (
     GeneralAction, ActivityAction, ActivityEditAction, EventAction,
     EventEditAction, EventCreationAction, SettingsAction, TransferAction,
-    ConfirmDeleteAction, OfferAction
+    ConfirmDeleteAction, OfferAction, HelpAction
 )
 from app.utils import get_next_run_time, format_weekdays, parse_weekdays
 from app.lexicon import LEXICON_RU
@@ -87,7 +87,7 @@ async def get_welcome_bonus_setting_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="🏦 Источник бонусов", callback_data=SettingsAction(action="menu_bonus_source").pack()))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
     return builder.as_markup()
-    
+
 def confirm_delete_keyboard(item_type: str, item_id: int) -> InlineKeyboardMarkup:
     """Создает клавиатуру с подтверждением удаления."""
     builder = InlineKeyboardBuilder()
@@ -96,7 +96,7 @@ def confirm_delete_keyboard(item_type: str, item_id: int) -> InlineKeyboardMarku
         InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack())
     )
     return builder.as_markup()
-    
+
 def get_transfer_confirmation_keyboard() -> InlineKeyboardMarkup:
     """Создает клавиатуру для подтверждения перевода."""
     builder = InlineKeyboardBuilder()
@@ -107,9 +107,28 @@ def get_transfer_confirmation_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 def get_use_default_keyboard(button_text: str, callback_data: str) -> InlineKeyboardMarkup:
-    """Создает клавиатуру с одной кнопкой для использования значения по умолчанию."""
+    """Создает клавиатуру с кнопкой значения по умолчанию и кнопкой отмены."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=button_text, callback_data=callback_data))
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack()))
+    return builder.as_markup()
+
+
+def get_activity_end_date_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора срока действия активности (с кнопкой 'Без ограничений' и отменой)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON_RU["btn_event_no_end_date"],
+            callback_data=ActivityAction(action="no_end_date", activity_id=0).pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON_RU["btn_cancel"],
+            callback_data=GeneralAction(action="cancel_dialog").pack(),
+        )
+    )
     return builder.as_markup()
 
 def get_event_creation_confirmation_keyboard() -> InlineKeyboardMarkup:
@@ -121,29 +140,35 @@ def get_event_creation_confirmation_keyboard() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-async def get_activities_keyboard(activities: list, user_subscriptions_ids: set, is_admin: bool) -> InlineKeyboardMarkup:
+async def get_activities_keyboard(activities: list, user_subscriptions_ids: set, is_admin: bool, general_events_count: int | None = None) -> InlineKeyboardMarkup:
     """Создает клавиатуру со списком активностей-категорий."""
     builder = InlineKeyboardBuilder()
     for activity in activities:
         is_subscribed = activity['id'] in user_subscriptions_ids
         display_name = activity['name']
         if activity['id'] == 1:
+            if not is_admin and general_events_count is not None and general_events_count == 0:
+                continue
             display_name = LEXICON_RU["text_general_events"]
             icon = "✅" if is_subscribed else "📢"
-            button_text = f"{icon} {display_name}"
+            if general_events_count is not None:
+                suffix = f" ({general_events_count})" if general_events_count > 0 else " (нет событий)"
+                button_text = f"{icon} {display_name}{suffix}"
+            else:
+                button_text = f"{icon} {display_name}"
         else:
             base_icon = ACTIVITY_ICONS[activity['id'] % len(ACTIVITY_ICONS)]
             icon = "✅" if is_subscribed else base_icon
             button_text = f"{icon} {display_name}"
-            
+
         builder.row(InlineKeyboardButton(text=button_text, callback_data=ActivityAction(action="view", activity_id=activity['id']).pack()))
-    
+
     if is_admin:
         builder.row(
             InlineKeyboardButton(text=LEXICON_RU["btn_create_activity"], callback_data=GeneralAction(action="admin_create_activity").pack()),
             InlineKeyboardButton(text=LEXICON_RU["btn_edit_activities_desc"], callback_data=SettingsAction(action="edit_activities_desc").pack())
         )
-    
+
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_menu"], callback_data=GeneralAction(action="main_menu").pack()))
     return builder.as_markup()
 
@@ -153,7 +178,7 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
     Для администраторов добавляет панель управления.
     """
     builder = InlineKeyboardBuilder()
-    
+
     actual_events = [
         e for e in events
         if get_next_run_time(
@@ -165,11 +190,11 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
             e.get('end_date'),
         ) is not None
     ]
-    
+
     for event in actual_events:
         event_name_display = event['name'] or activity_name
         next_run_dt = get_next_run_time(
-            event['event_type'], event.get('event_date'), event.get('weekday'), 
+            event['event_type'], event.get('event_date'), event.get('weekday'),
             event.get('event_time'), event.get('last_run'), event.get('end_date')
         )
         date_str = ""
@@ -177,7 +202,7 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
             weekday_name = WEEKDAYS_RU[next_run_dt.weekday()]
             month_name = MONTHS_RU[next_run_dt.month - 1]
             date_str = f" ({weekday_name}, {next_run_dt.day} {month_name})"
-        
+
         button_text = f"🗓️ {event_name_display}{date_str}"
         builder.row(InlineKeyboardButton(text=button_text, callback_data=EventAction(action="view_in_activity", event_id=event['id']).pack()))
 
@@ -186,7 +211,7 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
             builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_unsubscribe_activity"], callback_data=ActivityAction(action="unsubscribe_confirm", activity_id=activity_id).pack()))
         else:
             builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_subscribe_all_events"], callback_data=ActivityAction(action="subscribe", activity_id=activity_id).pack()))
-            
+
     if is_admin:
         builder.row(
             InlineKeyboardButton(text=LEXICON_RU["btn_edit"], callback_data=ActivityAction(action="edit_menu", activity_id=activity_id).pack()),
@@ -196,7 +221,7 @@ async def get_activity_view_keyboard(activity_name: str, activity_id: int, event
             InlineKeyboardButton(text=LEXICON_RU["btn_list_subscribers"], callback_data=ActivityAction(action="list_subscribers", activity_id=activity_id).pack()),
             InlineKeyboardButton(text=LEXICON_RU["btn_broadcast"], callback_data=ActivityAction(action="broadcast", activity_id=activity_id).pack()),
         )
-        
+
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_activities"], callback_data=GeneralAction(action="back_to_activities").pack()))
     return builder.as_markup()
 
@@ -247,14 +272,21 @@ def get_activity_edit_menu_keyboard(activity_id: int) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-async def get_event_view_keyboard(event_id: int, activity_id: int, next_run_date: date, registration_status: str, is_admin: bool) -> InlineKeyboardMarkup:
+async def get_event_view_keyboard(
+    event_id: int,
+    activity_id: int,
+    next_run_date: date,
+    registration_status: str,
+    is_admin: bool,
+    single_cost_str: str | None = None,
+) -> InlineKeyboardMarkup:
     """
     Создает клавиатуру для просмотра события.
     Для администраторов добавляет панель управления.
     """
     builder = InlineKeyboardBuilder()
     date_str = next_run_date.strftime('%d.%m')
-    
+
     # Блок регистрации для пользователя
     if registration_status == "registered_manual":
         text = LEXICON_RU["btn_registered_manual"].format(date_str=date_str)
@@ -265,7 +297,10 @@ async def get_event_view_keyboard(event_id: int, activity_id: int, next_run_date
         cb = EventAction(action="cancel", event_id=event_id, target_date=next_run_date).pack()
         builder.row(InlineKeyboardButton(text=text, callback_data=cb))
     elif registration_status == "unregistered":
-        text = LEXICON_RU["btn_register_event"].format(date_str=date_str)
+        if single_cost_str:
+            text = f"➕ Записаться разово на {date_str} ({single_cost_str})"
+        else:
+            text = LEXICON_RU["btn_register_event"].format(date_str=date_str)
         cb = EventAction(action="register", event_id=event_id, target_date=next_run_date).pack()
         builder.row(InlineKeyboardButton(text=text, callback_data=cb))
     elif registration_status == "cancelled_auto":
@@ -280,7 +315,7 @@ async def get_event_view_keyboard(event_id: int, activity_id: int, next_run_date
             InlineKeyboardButton(text=LEXICON_RU["btn_delete"], callback_data=EventAction(action="delete_confirm", event_id=event_id).pack())
         ]
         builder.row(*admin_buttons)
-        
+
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_activity"], callback_data=ActivityAction(action="view", activity_id=activity_id).pack()))
     return builder.as_markup()
 
@@ -296,7 +331,7 @@ async def get_events_keyboard(events: list) -> InlineKeyboardMarkup:
     """Создает клавиатуру со списком событий."""
     builder = InlineKeyboardBuilder()
     weekdays_map = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-    
+
     for event_row in events:
         event = dict(event_row)
         next_run = get_next_run_time(
@@ -307,13 +342,13 @@ async def get_events_keyboard(events: list) -> InlineKeyboardMarkup:
             event.get('last_run'),
             event.get('end_date'),
         )
-        
+
         if not next_run: continue # Пропускаем события без будущих запусков
 
         date_str = f"{next_run.day}.{next_run.strftime('%m')}"  # без ведущего нуля
         weekday_name = weekdays_map[next_run.weekday()]
         time_str = next_run.strftime('%H:%M')
-       
+
         display_name = event.get('name') or event.get('activity_name')
         text = f"– {weekday_name} ({date_str}) – {display_name} | {time_str} {MSK_LABEL}"
         builder.row(InlineKeyboardButton(text=text, callback_data=EventAction(action="view", event_id=event['id']).pack()))
@@ -348,20 +383,20 @@ def get_weekday_keyboard(selected_weekdays: list[int] = None) -> InlineKeyboardM
     """Создает клавиатуру для множественного выбора дней недели."""
     if selected_weekdays is None:
         selected_weekdays = []
-        
+
     builder = InlineKeyboardBuilder()
     weekdays = {"Пн": 0, "Вт": 1, "Ср": 2, "Чт": 3, "Пт": 4, "Сб": 5, "Вс": 6}
-    
+
     buttons = []
     for day_label, idx in weekdays.items():
         text = f"✅ {day_label}" if idx in selected_weekdays else day_label
         buttons.append(InlineKeyboardButton(text=text, callback_data=EventCreationAction(action="toggle_weekday", weekday=idx).pack()))
-        
+
     builder.row(*buttons)
-    
+
     if selected_weekdays:
         builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_done_confirm"], callback_data=EventCreationAction(action="confirm_weekdays").pack()))
-        
+
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_cancel"], callback_data=GeneralAction(action="cancel_dialog").pack()))
     return builder.as_markup()
 
@@ -370,7 +405,7 @@ async def get_settings_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     # 1. Широкая кнопка на 2 колонки
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_demurrage"], callback_data=SettingsAction(action="menu_demurrage").pack()))
-    
+
     # Тексты (левая колонка) | Деньги и поощрения (правая колонка)
     builder.row(
         InlineKeyboardButton(text=LEXICON_RU["btn_edit_welcome_bot"], callback_data=SettingsAction(action="edit_welcome_bot").pack()),
@@ -384,7 +419,7 @@ async def get_settings_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=LEXICON_RU["btn_edit_reminder"], callback_data=SettingsAction(action="edit_reminder").pack()),
         InlineKeyboardButton(text=LEXICON_RU["btn_tag_rules"], callback_data=SettingsAction(action="menu_tag_rules").pack())
     )
-    
+
     # Кнопки настройки источника бонусов и топиков
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_bonus_source"], callback_data=SettingsAction(action="menu_bonus_source").pack()))
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_menu_topics"], callback_data=SettingsAction(action="menu_topics").pack()))
@@ -430,7 +465,7 @@ async def get_demurrage_settings_keyboard(is_enabled: bool) -> InlineKeyboardMar
     else:
         toggle_text = LEXICON_RU["btn_demurrage_off"]
         toggle_callback = SettingsAction(action="toggle_demurrage", enabled=True).pack()
-    
+
     builder.row(
         InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback),
         InlineKeyboardButton(text=LEXICON_RU["btn_demurrage_rate"], callback_data=SettingsAction(action="set_demurrage_rate").pack())
@@ -449,7 +484,7 @@ def get_welcome_group_prompt_keyboard(is_enabled: bool, setting_action: str = No
     else:
         toggle_text = LEXICON_RU["btn_welcome_group_off"]
         toggle_callback = SettingsAction(action="toggle_welcome_group", enabled=True).pack()
-    
+
     builder.row(InlineKeyboardButton(text=toggle_text, callback_data=toggle_callback))
     if setting_action:
         builder.row(InlineKeyboardButton(text="🔄 Восстановить по умолчанию", callback_data=SettingsAction(action=f"reset_{setting_action}").pack()))
@@ -535,3 +570,107 @@ def get_status_keyboard(dashboard_url: str = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🌐 Открыть веб-дашборд", url=dashboard_url)
         )
     return builder.as_markup()
+
+
+def get_event_access_mode_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру выбора режима доступа к событию (только по подписке или открыто разово)."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON_RU["btn_event_access_sub_only"],
+            callback_data=EventCreationAction(action="set_access", allow_single=0).pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON_RU["btn_event_access_open_single"],
+            callback_data=EventCreationAction(action="set_access", allow_single=1).pack()
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=LEXICON_RU["btn_cancel"],
+            callback_data=GeneralAction(action="cancel_dialog").pack()
+        )
+    )
+    return builder.as_markup()
+
+
+def get_user_help_keyboard(active_section: str = "help_user_main", is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Создает модульную клавиатуру для пользовательской справки (/help)."""
+    builder = InlineKeyboardBuilder()
+    main_mark = "• " if active_section == "help_user_main" else ""
+    builder.row(
+        InlineKeyboardButton(
+            text=f"{main_mark}📖 Главная",
+            callback_data=HelpAction(section="help_user_main").pack()
+        )
+    )
+    grid_items = [
+        ("help_user_economy", "💡 Орфы и Демерредж"),
+        ("help_user_activities", "🎨 Активности и События"),
+        ("help_user_rewards", "🎁 Награды и Овердрафт"),
+        ("help_user_commands", "📦 Обмен и Команды"),
+    ]
+    btns = []
+    for key, label in grid_items:
+        mark = "• " if active_section == key else ""
+        btns.append(InlineKeyboardButton(text=f"{mark}{label}", callback_data=HelpAction(section=key).pack()))
+    builder.row(btns[0], btns[1])
+    builder.row(btns[2], btns[3])
+    if is_admin:
+        builder.row(
+            InlineKeyboardButton(
+                text="🔐 Справка админа (/gide)",
+                callback_data=HelpAction(section="help_admin_main").pack()
+            )
+        )
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_menu"], callback_data=GeneralAction(action="main_menu").pack()))
+    return builder.as_markup()
+
+
+def get_admin_help_keyboard(active_section: str = "help_admin_main") -> InlineKeyboardMarkup:
+    """Создает модульную клавиатуру для справки администратора (/gide)."""
+    builder = InlineKeyboardBuilder()
+    admin_items = [
+        ("help_admin_main", "🔐 Обзор админа"),
+        ("help_admin_treasury", "🏛 Казна и Балансы"),
+        ("help_admin_activities", "🎯 Активности и Рассылки"),
+        ("help_admin_settings", "⚙️ Настройки и #Тэги"),
+    ]
+    btns = []
+    for key, label in admin_items:
+        mark = "• " if active_section == key else ""
+        btns.append(InlineKeyboardButton(text=f"{mark}{label}", callback_data=HelpAction(section=key).pack()))
+    builder.row(btns[0], btns[1])
+    builder.row(btns[2], btns[3])
+    builder.row(
+        InlineKeyboardButton(
+            text="⬅️ К справке участника (/help)",
+            callback_data=HelpAction(section="help_user_main").pack()
+        )
+    )
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back_to_menu"], callback_data=GeneralAction(action="main_menu").pack()))
+    return builder.as_markup()
+
+
+def get_persistent_bottom_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Создаёт постоянную компактную клавиатуру внизу под строкой ввода (в 1 клик):
+    - Для обычных пользователей: одна кнопка «🏠 Главное меню».
+    - Для администраторов: 4 кнопки быстрого доступа («🏠 Главное меню», «⚙️ Настройки», «🩺 Статус», «🔐 Гид админа»).
+    """
+    if is_admin:
+        rows = [
+            [KeyboardButton(text="🏠 Главное меню"), KeyboardButton(text="⚙️ Настройки")],
+            [KeyboardButton(text="🩺 Статус"), KeyboardButton(text="🔐 Гид админа")],
+        ]
+    else:
+        rows = [
+            [KeyboardButton(text="🏠 Главное меню")],
+        ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+    )

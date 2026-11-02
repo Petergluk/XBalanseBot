@@ -208,7 +208,7 @@ LEXICON_RU: dict[str, str] = {
     "btn_menu_create_offer": "📦 Создать объявление",
     "btn_menu_activity": "🎨 Активности сообщества",
     "btn_menu_event": "📅 Ближайшие события",
-    "btn_menu_balance": "💰 Баланс и история",
+    "btn_menu_balance": "📜 История операций",
     "btn_menu_help": "📖 Справка",
     
     # === Клавиатура онбординга ===

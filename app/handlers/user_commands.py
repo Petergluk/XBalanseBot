@@ -15,6 +15,7 @@
   универсальную функцию `show_activities_list`.
 """
 import logging
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from html import escape
@@ -26,17 +27,17 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from psycopg.rows import dict_row
 
-from app.config import CURRENCY_SYMBOL
+from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
 from app.database import db
 from app.lexicon import LEXICON_RU
 from app.handlers import activity_handlers, common as common_handlers, event_handlers
 from app.keyboards import (get_back_to_menu_keyboard, get_main_menu_keyboard,
-                           get_transfer_confirmation_keyboard)
+                           get_transfer_confirmation_keyboard, get_cancel_dialog_keyboard)
 from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
                        get_user_balance, is_admin, validate_amount,
-                       add_message_id_to_state, check_is_group_member)
+                       add_message_id_to_state, check_is_group_member, get_next_run_time)
 from app.callbacks import GeneralAction, TransferAction
 
 router = Router()
@@ -81,7 +82,7 @@ async def cancel_transfer_dialog(message: Message, state: FSMContext, bot: Bot):
     await state.update_data(message_ids=message_ids)
     
     await cleanup_transfer_dialog(state, bot, message.chat.id)
-    await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+    await show_main_menu(message)
 
 
 # --- БЛОК ГЛАВНОГО МЕНЮ ---
@@ -100,8 +101,89 @@ async def show_main_menu(message: Message | CallbackQuery):
         await ensure_user_exists(user_id, message.from_user.username, message.from_user.is_bot)
 
     balance = await get_user_balance(user_id)
-    text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
-    keyboard = get_main_menu_keyboard(is_member=is_member)
+    from_user = message.from_user
+    name = from_user.full_name or from_user.first_name or "Участник"
+    username_part = f" (@{from_user.username})" if from_user.username else ""
+
+    # Собираем данные дашборда: обязательства и активные лоты
+    commitments_str = ""
+    try:
+        commitments = await db.get_user_commitments(user_id)
+        deals_blocks = []
+        if commitments.get("owed_by_me"):
+            items = []
+            for o in commitments["owed_by_me"]:
+                buyer = f"@{o['buyer_username']}" if o.get("buyer_username") else "покупателю"
+                items.append(f"  • «{escape(o['title'])}» для {buyer}")
+            nl = chr(10)
+            deals_blocks.append(f"📤 <b>Вы должны передать:</b>{nl}" + nl.join(items))
+
+        if commitments.get("owed_to_me"):
+            items = []
+            for o in commitments["owed_to_me"]:
+                seller = f"@{o['seller_username']}" if o.get("seller_username") else "продавца"
+                items.append(f"  • «{escape(o['title'])}» от {seller}")
+            nl = chr(10)
+            deals_blocks.append(f"📥 <b>Вам должны предоставить:</b>{nl}" + nl.join(items))
+
+        if commitments.get("active_selling_count", 0) > 0:
+            deals_blocks.append(f"🏷 Активных лотов на бирже: <b>{commitments['active_selling_count']}</b>")
+
+        if deals_blocks:
+            nl2 = chr(10) + chr(10)
+            commitments_str = nl2 + nl2.join(deals_blocks)
+    except Exception as e:
+        logger.debug(f"Could not load commitments for dashboard: {e}")
+
+    # Ближайшее событие для пользователя (если есть в ближайшие 7 дней)
+    upcoming_event_str = ""
+    try:
+        user_subs = await db.get_user_subscriptions(user_id)
+        sub_activity_ids = {s["activity_id"] for s in user_subs}
+        all_events = await db.get_all_events()
+        now = datetime.now(ZoneInfo("Europe/Moscow"))
+        week_ahead = now + timedelta(days=7)
+        dated = []
+        for ev in all_events:
+            if not sub_activity_ids or ev["activity_id"] in sub_activity_ids:
+                next_run = get_next_run_time(
+                    ev["event_type"], ev.get("event_date"), ev.get("weekday"),
+                    ev.get("event_time"), ev.get("last_run"), ev.get("end_date")
+                )
+                if next_run and now <= next_run <= week_ahead:
+                    dated.append((next_run, ev))
+        if dated:
+            dated.sort(key=lambda x: x[0])
+            next_time, next_ev = dated[0]
+            nl = chr(10)
+            upcoming_event_str = f"{nl}📅 <b>Ближайшее событие:</b> {escape(next_ev['name'])} ({next_time.strftime('%d.%m %H:%M')} MSK)"
+    except Exception as e:
+        logger.debug(f"Could not load upcoming events for dashboard: {e}")
+
+    nl = chr(10)
+    text = (
+        f"👤 <b>{escape(name)}</b>{username_part}{nl}"
+        f"💰 Баланс: <b>{format_amount(balance)} {CURRENCY_SYMBOL}</b>"
+        f"{upcoming_event_str}"
+        f"{commitments_str}"
+    )
+
+    # Инвайт-ссылка для кнопки перехода в группу (если ещё не в группе)
+    invite_link = None
+    if not is_member:
+        try:
+            expire_date = int(time.time()) + 86400
+            invite_obj = await bot.create_chat_invite_link(
+                chat_id=MAIN_GROUP_ID,
+                member_limit=1,
+                expire_date=expire_date,
+                name=f"Invite for {from_user.full_name}"
+            )
+            invite_link = invite_obj.invite_link
+        except Exception as e:
+            logger.warning(f"Failed to create invite link for main menu: {e}")
+
+    keyboard = get_main_menu_keyboard(is_member=is_member, invite_link=invite_link)
 
     if isinstance(message, Message):
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -221,10 +303,9 @@ async def cmd_send(message: Message, state: FSMContext, bot: Bot):
 
     if len(args) == 1:
         await state.set_state(TransferStates.waiting_for_recipient)
-        from app.keyboards import get_back_to_menu_keyboard
         sent_message = await message.answer(
-            "Кому вы хотите сделать перевод? Укажите @username получателя.\n\nДля отмены введите /cancel",
-            reply_markup=get_back_to_menu_keyboard()
+            LEXICON_RU["msg_transfer_ask_recipient"],
+            reply_markup=get_cancel_dialog_keyboard()
         )
         await state.update_data(message_ids=[message.message_id, sent_message.message_id])
         return
@@ -245,24 +326,23 @@ async def process_recipient_input(message: Message, state: FSMContext, bot: Bot)
 
     recipient_username = message.text.lstrip('@').lower()
     if recipient_username == (message.from_user.username or '').lower():
-        sent_message = await message.reply(LEXICON_RU["err_transfer_self_dialog"])
+        sent_message = await message.reply(LEXICON_RU["err_transfer_self_dialog"], reply_markup=get_cancel_dialog_keyboard())
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
 
     recipient = await db.get_user(username=recipient_username)
     if not recipient:
-        sent_message = await message.reply(LEXICON_RU["err_user_not_found_dialog"].format(recipient_username=recipient_username))
+        sent_message = await message.reply(LEXICON_RU["err_user_not_found_dialog"].format(recipient_username=recipient_username), reply_markup=get_cancel_dialog_keyboard())
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
         return
     
     await state.update_data(recipient_id=recipient['id'], recipient_telegram_id=recipient['telegram_id'], recipient_username=recipient_username)
     await state.set_state(TransferStates.waiting_for_amount)
-    from app.keyboards import get_back_to_menu_keyboard
     sent_message = await message.answer(
         LEXICON_RU["msg_transfer_ask_amount"].format(currency_symbol=CURRENCY_SYMBOL, recipient_username=recipient_username),
-        reply_markup=get_back_to_menu_keyboard()
+        reply_markup=get_cancel_dialog_keyboard()
     )
     message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
     await state.update_data(message_ids=message_ids)
@@ -282,10 +362,9 @@ async def process_amount_input(message: Message, state: FSMContext):
     try:
         amount = validate_amount(message.text)
     except ValueError:
-        from app.keyboards import get_back_to_menu_keyboard
         sent_message = await message.reply(
             LEXICON_RU["err_transfer_invalid_amount_dialog"],
-            reply_markup=get_back_to_menu_keyboard()
+            reply_markup=get_cancel_dialog_keyboard()
         )
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
         await state.update_data(message_ids=message_ids)
@@ -294,10 +373,9 @@ async def process_amount_input(message: Message, state: FSMContext):
     from app.config import SUPER_ADMIN_ID
     sender_balance = await get_user_balance(message.from_user.id)
     if message.from_user.id != SUPER_ADMIN_ID and sender_balance < amount:
-        from app.keyboards import get_back_to_menu_keyboard
         sent_message = await message.reply(
             LEXICON_RU["err_insufficient_funds"].format(balance=format_amount(sender_balance), currency_symbol=CURRENCY_SYMBOL),
-            reply_markup=get_back_to_menu_keyboard(),
+            reply_markup=get_cancel_dialog_keyboard(),
             parse_mode="HTML"
         )
         message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
@@ -306,10 +384,9 @@ async def process_amount_input(message: Message, state: FSMContext):
 
     await state.update_data(amount=str(amount))
     await state.set_state(TransferStates.waiting_for_comment)
-    from app.keyboards import get_back_to_menu_keyboard
     sent_message = await message.answer(
         LEXICON_RU["msg_transfer_ask_comment"],
-        reply_markup=get_back_to_menu_keyboard()
+        reply_markup=get_cancel_dialog_keyboard()
     )
     message_ids = add_message_id_to_state({'message_ids': message_ids}, sent_message.message_id)
     await state.update_data(message_ids=message_ids)

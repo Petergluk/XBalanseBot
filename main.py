@@ -217,18 +217,10 @@ async def setup_bot_commands(bot: Bot):
         BotCommandScopeChat,
     )
 
-    # Команды для личных сообщений с ботом
+    # Команды для личных сообщений с ботом (минималистичное меню без терминальной перегрузки)
     user_commands = [
         BotCommand(command="menu", description="🤖 Главное меню"),
-        BotCommand(command="balance", description="💰 Баланс и выписка"),
-        BotCommand(command="send", description="💸 Перевести орфы"),
-        BotCommand(command="offer", description="🛍 Создать лот на бирже"),
-        BotCommand(command="activity", description="🎨 Активности и подписки"),
-        BotCommand(command="event", description="📅 Календарь событий"),
-        BotCommand(command="history", description="📜 История транзакций"),
-        BotCommand(command="gdp", description="📊 Экономика сообщества"),
         BotCommand(command="help", description="📖 Справка"),
-        BotCommand(command="cancel", description="❌ Отменить текущее действие"),
     ]
     # Команды, которые реально работают внутри группового чата
     group_commands = [
@@ -246,12 +238,11 @@ async def setup_bot_commands(bot: Bot):
 
     # Расширенные команды для супер-админа
     if SUPER_ADMIN_ID:
-        admin_commands = user_commands + [
+        admin_commands = [
+            BotCommand(command="menu", description="🤖 Главное меню"),
             BotCommand(command="settings", description="⚙️ Настройки бота"),
-            BotCommand(command="users", description="👥 Список пользователей"),
-            BotCommand(command="gide", description="📘 Гид по валюте"),
-            BotCommand(command="test", description="🧪 Тестовые команды"),
-            BotCommand(command="status", description="🩺 Статус системы и сервисов"),
+            BotCommand(command="status", description="🩺 Статус системы"),
+            BotCommand(command="help", description="📖 Справка"),
         ]
         try:
             await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=SUPER_ADMIN_ID))

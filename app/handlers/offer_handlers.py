@@ -48,25 +48,9 @@ async def cleanup_offer_dialog(state: FSMContext, bot: Bot, chat_id: int):
 async def cancel_offer_creation(event: Message | CallbackQuery, state: FSMContext, bot: Bot):
     """Общая функция отмены создания объявления."""
     chat_id = event.chat.id if isinstance(event, Message) else event.message.chat.id
-    
-    # Сначала удалим все сообщения диалога
     await cleanup_offer_dialog(state, bot, chat_id)
-    
-    # Возвращаем главное меню
-    user_id = event.from_user.id
-    balance = await get_user_balance(user_id)
-    text = LEXICON_RU["msg_main_menu"].format(balance=format_amount(balance), currency_symbol=CURRENCY_SYMBOL)
-    is_member = await check_is_group_member(bot, user_id)
-    keyboard = get_main_menu_keyboard(is_member=is_member)
-    
-    if isinstance(event, Message):
-        await event.answer(text, reply_markup=keyboard, parse_mode="HTML")
-    elif isinstance(event, CallbackQuery):
-        try:
-            await event.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-            await event.answer()
-        except Exception as e:
-            logger.warning(f"Error sending main menu on offer cancel: {e}")
+    from app.handlers.user_commands import show_main_menu
+    await show_main_menu(event)
 
 # --- Перехват отмены /cancel или слова cancel в состояниях OfferCreationStates ---
 @router.message(Command("cancel"), StateFilter(OfferCreationStates))

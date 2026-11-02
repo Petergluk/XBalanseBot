@@ -82,9 +82,8 @@ async def process_cancel_delete(callback: CallbackQuery, state: FSMContext):
             logger.warning(f"Could not delete messages in cancel_dialog callback: {e}")
 
     await state.clear()
-    from app.keyboards import get_back_to_menu_keyboard
-    await callback.message.edit_text(LEXICON_RU["msg_action_cancelled"], reply_markup=get_back_to_menu_keyboard())
-    await callback.answer()
+    from app.handlers.user_commands import show_main_menu
+    await show_main_menu(callback)
 
 
 async def send_onboarding_prompt(target: Message | CallbackQuery):
@@ -137,24 +136,8 @@ async def cmd_start(message: Message, state: FSMContext):
             logger.info(f"Super admin {SUPER_ADMIN_ID} re-promoted via /start")
 
     if not is_new:
-        stats = await db.get_returning_user_stats(message.from_user.id)
-        if stats and (stats['sent'] > 0 or stats['received'] > 0 or stats['deducted'] > 0):
-            text = LEXICON_RU["msg_welcome_back"].format(
-                mention=message.from_user.mention_html(),
-                balance=format_amount(stats['balance']),
-                currency_symbol=CURRENCY_SYMBOL,
-                sent=format_amount(stats['sent']),
-                received=format_amount(stats['received']),
-                deducted=format_amount(stats['deducted'])
-            )
-            from app.keyboards import get_back_to_menu_keyboard
-            await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
-        else:
-            text = LEXICON_RU["msg_welcome_back_simple"].format(
-                mention=message.from_user.mention_html()
-            )
-            from app.keyboards import get_back_to_menu_keyboard
-            await message.answer(text, reply_markup=get_back_to_menu_keyboard(), parse_mode="HTML")
+        from app.handlers.user_commands import show_main_menu
+        await show_main_menu(message)
         return
 
     # Если пользователь уже был в группе, но впервые запустил бота
@@ -162,52 +145,49 @@ async def cmd_start(message: Message, state: FSMContext):
     logger.info(f"Sent onboarding message to new user {message.from_user.id}")
 
 async def send_invite_link(target: Message | CallbackQuery):
-    """Генерирует и отправляет пользователю инвайт-ссылку в группу."""
+    """Генерирует и отправляет пользователю инвайт-ссылку в группу прямой URL-кнопкой."""
     from app.config import MAIN_GROUP_ID
     import time
-    from app.keyboards import get_back_to_menu_keyboard
-    
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+
     user_id = target.from_user.id
     bot = target.bot
     message_to_edit = target.message if isinstance(target, CallbackQuery) else None
-    chat_obj = message_to_edit.chat if message_to_edit else getattr(target, 'chat', None)
-    is_group_chat = getattr(chat_obj, 'type', 'private') in ('group', 'supergroup')
-    reply_markup = None if is_group_chat else get_back_to_menu_keyboard()
-    
+
     # 1. Проверяем, не состоит ли пользователь уже в группе
     is_member = await check_is_group_member(bot, user_id)
-
     if is_member:
         text = "Вы уже являетесь участником группы! 🎉"
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=reply_markup)
+            await message_to_edit.edit_text(text)
         else:
-            await target.answer(text, reply_markup=reply_markup)
+            await target.answer(text)
         return
 
-    # 2. Генерируем новую одноразовую ссылку (не кэшируем, чтобы избежать отправки использованных ссылок)
+    # 2. Генерируем новую одноразовую ссылку
     try:
         expire_date = int(time.time()) + 86400  # 24 hours
         invite_link_obj = await bot.create_chat_invite_link(
-            chat_id=MAIN_GROUP_ID, 
+            chat_id=MAIN_GROUP_ID,
             member_limit=1,
             expire_date=expire_date,
             name=f"Invite for {target.from_user.full_name}"
         )
-        
-        text = LEXICON_RU["msg_invite_link"].format(invite_link=invite_link_obj.invite_link)
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🚀 Вступить в группу", url=invite_link_obj.invite_link))
+        text = "Ваша персональная ссылка для вступления в группу готова! Нажмите кнопку ниже:"
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+            await message_to_edit.edit_text(text, reply_markup=builder.as_markup(), disable_web_page_preview=True)
         else:
-            await target.answer(text, reply_markup=reply_markup, disable_web_page_preview=True)
-            
+            await target.answer(text, reply_markup=builder.as_markup(), disable_web_page_preview=True)
     except Exception as e:
         logger.error(f"Failed to create invite link: {e}")
         text = LEXICON_RU["err_invite_link"]
         if message_to_edit:
-            await message_to_edit.edit_text(text, reply_markup=reply_markup)
+            await message_to_edit.edit_text(text)
         else:
-            await target.answer(text, reply_markup=reply_markup)
+            await target.answer(text)
 
 @router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
 async def process_onboarding_agree(callback: CallbackQuery):

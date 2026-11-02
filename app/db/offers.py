@@ -208,3 +208,49 @@ class OfferRepository(BaseRepository):
                 
                 await conn.execute("UPDATE offers SET status = 'cancelled' WHERE id = %s", (offer_id,))
                 return True
+
+    async def get_user_commitments(self, telegram_id: int) -> Dict[str, Any]:
+        """Возвращает обязательства пользователя:
+        - active_selling_count: число активных лотов на бирже
+        - owed_by_me: список проданных лотов (где продавец - я, статус 'sold'), за которые получена оплата и нужно выполнить услугу/передать товар
+        - owed_to_me: список купленных лотов (где покупатель - я, статус 'sold'), которые мне должны передать
+        """
+        async with self.pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
+                user = await cur.fetchone()
+                if not user:
+                    return {"active_selling_count": 0, "owed_by_me": [], "owed_to_me": []}
+
+                await cur.execute(
+                    "SELECT COUNT(*) as cnt FROM offers WHERE seller_id = %s AND status = 'active'",
+                    (user['id'],)
+                )
+                row = await cur.fetchone()
+                active_count = row['cnt'] if row else 0
+
+                await cur.execute(
+                    """SELECT o.id, o.title, o.price, b.username as buyer_username
+                       FROM offers o
+                       JOIN users b ON o.buyer_id = b.id
+                       WHERE o.seller_id = %s AND o.status = 'sold'
+                       ORDER BY o.created_at DESC LIMIT 5""",
+                    (user['id'],)
+                )
+                owed_by_me = await cur.fetchall()
+
+                await cur.execute(
+                    """SELECT o.id, o.title, o.price, s.username as seller_username
+                       FROM offers o
+                       JOIN users s ON o.seller_id = s.id
+                       WHERE o.buyer_id = %s AND o.status = 'sold'
+                       ORDER BY o.created_at DESC LIMIT 5""",
+                    (user['id'],)
+                )
+                owed_to_me = await cur.fetchall()
+
+                return {
+                    "active_selling_count": active_count,
+                    "owed_by_me": owed_by_me or [],
+                    "owed_to_me": owed_to_me or [],
+                }

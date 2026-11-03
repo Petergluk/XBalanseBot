@@ -18,7 +18,7 @@
 - Исправлена ошибка в `get_activity_view_keyboard`: добавлена проверка на None для `get_next_run_time`.
 """
 from datetime import date
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.callbacks import (

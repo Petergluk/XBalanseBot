@@ -96,11 +96,21 @@ class TransactionRepository(BaseRepository):
             (amount, amount, recipient_user_id)
         )
 
-        source_user_id = SYSTEM_FUND_USER_ID if from_treasury == 0 else treasury_id
-        await conn.execute(
-            "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
-            (source_user_id, recipient_user_id, amount, tx_type, comment)
-        )
+        if from_fund > 0 and from_treasury > 0:
+            await conn.execute(
+                "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
+                (SYSTEM_FUND_USER_ID, recipient_user_id, from_fund, tx_type, comment)
+            )
+            await conn.execute(
+                "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
+                (treasury_id, recipient_user_id, from_treasury, tx_type, comment)
+            )
+        else:
+            source_user_id = SYSTEM_FUND_USER_ID if from_treasury == 0 else treasury_id
+            await conn.execute(
+                "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, %s, %s)",
+                (source_user_id, recipient_user_id, amount, tx_type, comment)
+            )
         return amount
 
     async def get_user_balance(self, telegram_id: int) -> Optional[Any]:

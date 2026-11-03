@@ -56,6 +56,14 @@ class ConnectionManager(BaseRepository):
                     ADD COLUMN IF NOT EXISTS single_cost NUMERIC(12, 2) DEFAULT NULL
                 """)
 
+                # FIN-NEW-04: Разрешаем 2 проводки welcome_bonus (из Фонда id=0 и Казны id=treasury_id) при stepwise-начислении
+                await cur.execute("DROP INDEX IF EXISTS uq_transactions_welcome_bonus")
+                await cur.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_welcome_bonus
+                    ON transactions (to_user_id, from_user_id)
+                    WHERE type = 'welcome_bonus'
+                """)
+
                 # Синхронизация sequences (Гарантируем, что значение sequence >= 1)
                 await cur.execute("SELECT setval('users_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM users), 1), 1))")
                 await cur.execute("SELECT setval('activities_id_seq', GREATEST(COALESCE((SELECT MAX(id) FROM activities), 1), 1))")

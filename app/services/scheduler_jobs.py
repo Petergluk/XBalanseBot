@@ -166,6 +166,7 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
 
     async with db.pool.connection() as conn:
         async with conn.transaction():
+            treasury_id = await db._get_or_create_treasury_id(conn)
             for user in participants:
                 fee = single_fee if user.get('is_single_visitor') else sub_fee
                 if fee <= 0:
@@ -189,19 +190,17 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                 grace_credit_used = db_user['grace_credit_used']
 
                 if balance >= fee:
-                    # Обычная оплата (быстро внутри БД-транзакции)
-                    from app.config import SUPER_ADMIN_ID
+                    # Обычная оплата (быстро внутри БД-транзакции, зачисляем в Игровую казну treasury_id)
                     await conn.execute("UPDATE users SET balance = balance - %s WHERE id = %s", (fee, user['id']))
                     await conn.execute(
                         "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, %s, %s, 'event_fee', %s)",
-                        (user['id'], fund_user_id, fee, f"Оплата за событие: {event_name}")
+                        (user['id'], treasury_id, fee, f"Оплата за событие: {event_name}")
                     )
                     await conn.execute("UPDATE users SET transaction_count = transaction_count + 1 WHERE id = %s", (user['id'],))
-                    if SUPER_ADMIN_ID:
-                        await conn.execute(
-                            "UPDATE users SET balance = balance + %s WHERE telegram_id = %s",
-                            (fee, SUPER_ADMIN_ID)
-                        )
+                    await conn.execute(
+                        "UPDATE users SET balance = balance + %s WHERE id = %s",
+                        (fee, treasury_id)
+                    )
 
                     start_time_str = f"\n🕒 Начало: {next_run_dt.strftime('%d.%m.%Y в %H:%M')} ({MSK_LABEL})"
                     notification_text = (
@@ -239,12 +238,18 @@ async def handle_payment_for_event(bot: Bot, event: dict, event_start_dt: dateti
                     )
                     notifications_to_send.append((user['telegram_id'], notification_text, None))
 
-    # Отправляем сетевые уведомления в Telegram ПОСЛЕ коммита БД-транзакции и снятия блокировок
-    for tg_id, text_msg, reply_kb in notifications_to_send:
-        try:
-            await bot.send_message(tg_id, text_msg, parse_mode="HTML", reply_markup=reply_kb)
-        except Exception as e:
-            logger.warning(f"Failed to send event payment notification to user {tg_id}: {e}")
+    # Отправляем сетевые уведомления в Telegram ПОСЛЕ коммита БД-транзакции (параллельно с лимитом Semaphore(10))
+    sem = asyncio.Semaphore(10)
+
+    async def _send_payment_notif(tg_id: int, text_msg: str, reply_kb):
+        async with sem:
+            try:
+                await bot.send_message(tg_id, text_msg, parse_mode="HTML", reply_markup=reply_kb)
+            except Exception as e:
+                logger.warning(f"Failed to send event payment notification to user {tg_id}: {e}")
+
+    if notifications_to_send:
+        await asyncio.gather(*(_send_payment_notif(tg_id, text_msg, reply_kb) for tg_id, text_msg, reply_kb in notifications_to_send))
 
     logger.info(f"Successfully processed payments for event {event['id']}.")
 
@@ -283,7 +288,9 @@ async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: date
     sub_fee = event['cost']
     single_fee = event['single_cost'] if event.get('single_cost') is not None else sub_fee
 
-    for user in participants:
+    sem = asyncio.Semaphore(10)
+
+    async def _send_reminder(user: dict):
         user_cost = single_fee if user.get('is_single_visitor') else sub_fee
         formatted_text = safe_format_template(
             reminder_text,
@@ -296,10 +303,13 @@ async def handle_reminders_for_event(bot: Bot, event: dict, event_start_dt: date
             reminder_minutes=event['reminder_time'],
             link=event.get('link') or ''
         )
-        try:
-            await bot.send_message(user['telegram_id'], formatted_text, parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Failed to send reminder to {user['telegram_id']} for event {event['id']}: {e}")
+        async with sem:
+            try:
+                await bot.send_message(user['telegram_id'], formatted_text, parse_mode="HTML")
+            except Exception as e:
+                logger.warning(f"Failed to send reminder to {user['telegram_id']} for event {event['id']}: {e}")
+
+    await asyncio.gather(*(_send_reminder(user) for user in participants))
 
 async def process_demurrage(bot: Bot):
     """Ежедневный процесс демерреджа."""

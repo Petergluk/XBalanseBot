@@ -153,6 +153,9 @@ async def test_get_system_status_structure():
 
     assert "overall_status" in status
     assert "app" in status
+    assert "commit_sha" in status["app"]
+    assert "release_tag" in status["app"]
+    assert "recent_errors" in status
     assert "database" in status
     assert "redis" in status
     assert "telegram" in status

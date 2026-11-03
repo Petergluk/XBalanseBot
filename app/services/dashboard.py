@@ -25,8 +25,103 @@ from app.database import db
 
 logger = logging.getLogger(__name__)
 
-# Фиксируем время запуска процесса
+from collections import deque
+import subprocess
+import traceback
+
+# Фиксируем время запуска процесса и метку релиза
 START_TIME = datetime.now(timezone.utc)
+APP_RELEASE_TAG = "2026.11.03-audit-fix (FIN-01..PERF-06)"
+
+# Кольцевой буфер последних ошибок и предупреждений (WARNING / ERROR / CRITICAL)
+_DASHBOARD_LOG_BUFFER = deque(maxlen=30)
+
+
+class DashboardErrorBufferHandler(logging.Handler):
+    """Перехватывает WARNING/ERROR/CRITICAL логи в память для отображения на /status."""
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = record.getMessage()
+            if record.exc_info:
+                exc_lines = traceback.format_exception(*record.exc_info)
+                short_tb = "".join(exc_lines[-2:]).strip()
+                if short_tb:
+                    msg = f"{msg} | {short_tb}"
+            if len(msg) > 500:
+                msg = msg[:497] + "..."
+            entry = {
+                "timestamp": datetime.fromtimestamp(record.created, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "level": record.levelname,
+                "source": f"{record.filename}:{record.lineno}",
+                "logger": record.name,
+                "message": msg,
+            }
+            _DASHBOARD_LOG_BUFFER.appendleft(entry)
+        except Exception:
+            pass
+
+
+_log_handler_installed = False
+
+
+def install_dashboard_log_handler():
+    """Подключает буфер ошибок к корневому логгеру Python (идемпотентно)."""
+    global _log_handler_installed
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers:
+        if isinstance(h, DashboardErrorBufferHandler):
+            _log_handler_installed = True
+            return
+    root_logger.addHandler(DashboardErrorBufferHandler())
+    _log_handler_installed = True
+
+
+install_dashboard_log_handler()
+
+
+def get_deploy_info() -> dict:
+    """Определяет текущий развернутый коммит и метаданные хостинга Koyeb."""
+    raw_sha = (
+        os.getenv("KOYEB_GIT_SHA")
+        or os.getenv("GIT_COMMIT_SHA")
+        or os.getenv("COMMIT_SHA")
+        or os.getenv("SOURCE_VERSION")
+        or ""
+    ).strip()
+    branch = (
+        os.getenv("KOYEB_GIT_BRANCH")
+        or os.getenv("GIT_BRANCH")
+        or "master"
+    ).strip()
+    commit_msg = ""
+    if not raw_sha:
+        try:
+            raw_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True, timeout=2
+            ).strip()
+            commit_msg = subprocess.check_output(
+                ["git", "log", "-1", "--format=%s"], stderr=subprocess.DEVNULL, text=True, timeout=2
+            ).strip()
+        except Exception:
+            pass
+    short_sha = raw_sha[:7] if raw_sha else "latest"
+    commit_url = (
+        f"https://github.com/Petergluk/XBalanseBot/commit/{raw_sha}"
+        if raw_sha
+        else "https://github.com/Petergluk/XBalanseBot/commits/master"
+    )
+    return {
+        "commit_sha": short_sha,
+        "commit_full_sha": raw_sha or None,
+        "commit_url": commit_url,
+        "branch": branch,
+        "release_tag": APP_RELEASE_TAG,
+        "commit_message": commit_msg or APP_RELEASE_TAG,
+        "koyeb_region": os.getenv("KOYEB_REGION") or os.getenv("KOYEB_DC") or "was",
+    }
 
 
 def format_uptime(seconds: float) -> str:
@@ -58,6 +153,9 @@ async def get_system_status(bot: Bot = None, scheduler: AsyncIOScheduler = None)
     now_utc = datetime.now(timezone.utc)
     uptime_sec = (now_utc - START_TIME).total_seconds()
 
+    install_dashboard_log_handler()
+    deploy_info = get_deploy_info()
+
     # 1. Koyeb Core
     app_status = {
         "name": "Koyeb App Core",
@@ -67,6 +165,12 @@ async def get_system_status(bot: Bot = None, scheduler: AsyncIOScheduler = None)
         "environment": "Development (Polling)" if DEV_MODE else "Production (Koyeb)",
         "python_version": sys.version.split()[0],
         "server_time_utc": now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "commit_sha": deploy_info["commit_sha"],
+        "commit_full_sha": deploy_info["commit_full_sha"],
+        "commit_url": deploy_info["commit_url"],
+        "branch": deploy_info["branch"],
+        "release_tag": deploy_info["release_tag"],
+        "commit_message": deploy_info["commit_message"],
     }
 
     # 2. Supabase PostgreSQL
@@ -207,15 +311,30 @@ async def get_system_status(bot: Bot = None, scheduler: AsyncIOScheduler = None)
     else:
         overall = "ok"
 
+    recent_errors = list(_DASHBOARD_LOG_BUFFER)
+    if tg_status.get("last_error_message"):
+        wh_msg = tg_status["last_error_message"]
+        if not any(wh_msg in e.get("message", "") for e in recent_errors):
+            recent_errors.insert(0, {
+                "timestamp": tg_status.get("last_error_date") or now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "level": "WEBHOOK",
+                "source": "telegram.webhook",
+                "logger": "TelegramWebhook",
+                "message": wh_msg,
+            })
+
     return {
         "overall_status": overall,
         "timestamp": now_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
         "dashboard_url": get_dashboard_url(),
         "app": app_status,
+        "deploy": deploy_info,
         "database": db_status,
         "redis": redis_status,
         "telegram": tg_status,
         "scheduler": sched_status,
+        "recent_errors": recent_errors[:25],
+        "errors_count": len(recent_errors),
     }
 
 
@@ -249,6 +368,8 @@ def format_telegram_status(data: dict) -> str:
         f"🩺 <b>Диагностика XBalanseBot</b> {overall_icon}",
         f"<b>Статус:</b> {overall_title}\n",
         f"🤖 <b>Koyeb (Бот):</b> {status_icons.get(app.get('status'), '⚪')} Онлайн",
+        f"   • Коммит: <code>{app.get('commit_sha', 'latest')}</code> ({app.get('branch', 'master')})",
+        f"   • Релиз: <code>{app.get('release_tag', '–')}</code>",
         f"   • Аптайм: <code>{app.get('uptime', '–')}</code>",
         f"   • Среда: <code>{app.get('environment', '–')}</code>\n",
         f"📱 <b>Telegram API:</b> {status_icons.get(tg.get('status'), '⚪')} {tg.get('latency_ms', '–')} ms",
@@ -275,6 +396,19 @@ def format_telegram_status(data: dict) -> str:
     lines.append("")
     lines.append(f"⏱️ <b>Планировщик:</b> {status_icons.get(sched.get('status'), '⚪')} {'Активен' if sched.get('running') else 'Остановлен'}")
     lines.append(f"   • Задач в очереди: <code>{sched.get('jobs_count', 0)}</code>")
+
+    recent_errs = data.get("recent_errors") or []
+    lines.append("")
+    if recent_errs:
+        lines.append(f"⚠️ <b>Последние сообщения лога ({len(recent_errs)}):</b>")
+        for err in recent_errs[:3]:
+            import html as _html
+            lvl = _html.escape(str(err.get("level", "WARN")))
+            src = _html.escape(str(err.get("source", "")))
+            msg = _html.escape(str(err.get("message", ""))[:140])
+            lines.append(f"   • [{lvl}] <code>{src}</code>: {msg}")
+    else:
+        lines.append("🟢 <b>Журнал ошибок:</b> чисто (0 ошибок)")
 
     lines.append(f"\n🕒 <i>Проверено: {data.get('timestamp')}</i>")
     return "\n".join(lines)
@@ -726,6 +860,14 @@ def render_dashboard_html(data: dict) -> str:
                         <span class="stat-value" id="appPython">–</span>
                     </div>
                     <div class="stat-row">
+                        <span class="stat-label">Развернутый коммит:</span>
+                        <span class="stat-value"><a href="https://github.com/Petergluk/XBalanseBot/commits/master" target="_blank" class="card-link" id="appCommit">–</a></span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Версия сборки:</span>
+                        <span class="stat-value" id="appRelease" style="font-size: 11px;">–</span>
+                    </div>
+                    <div class="stat-row">
                         <span class="stat-label">Серверное время:</span>
                         <span class="stat-value" id="appTime">–</span>
                     </div>
@@ -897,6 +1039,23 @@ def render_dashboard_html(data: dict) -> str:
             </div>
         </div>
 
+        <!-- Recent Errors & Warnings Log Section -->
+        <div class="card" style="margin-bottom: 24px;">
+            <div class="card-header">
+                <div class="card-title">
+                    <span>📋</span> Журнал последних ошибок и предупреждений (Runtime & Webhook Logs)
+                </div>
+                <span class="badge ok" id="errorsBadge">0 ошибок</span>
+            </div>
+            <div id="errorsContainer" style="display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto;">
+                <div style="font-size: 13px; color: var(--text-secondary);">Ошибок и предупреждений с момента запуска контейнера не зафиксировано.</div>
+            </div>
+            <div class="card-footer">
+                <span>Кольцевой буфер памяти (WARNING / ERROR / Webhook)</span>
+                <span id="errorsCommitHint" style="font-family: ui-monospace, monospace;">–</span>
+            </div>
+        </div>
+
         <!-- Info Footer -->
         <div class="info-box">
             💡 <strong>Подсказка:</strong> Для того чтобы Koyeb не усыплял бота на бесплатном тарифе, настройте в 
@@ -935,6 +1094,17 @@ def render_dashboard_html(data: dict) -> str:
             document.getElementById('appEnv').textContent = d.app.environment;
             document.getElementById('appPython').textContent = d.app.python_version;
             document.getElementById('appTime').textContent = d.app.server_time_utc;
+            const commitEl = document.getElementById('appCommit');
+            if (commitEl) {{
+                const sha = (d.app && d.app.commit_sha) ? d.app.commit_sha : 'latest';
+                const branch = (d.app && d.app.branch) ? d.app.branch : 'master';
+                commitEl.textContent = sha + ' (' + branch + ') ↗';
+                if (d.app && d.app.commit_url) commitEl.href = d.app.commit_url;
+            }}
+            const releaseEl = document.getElementById('appRelease');
+            if (releaseEl) {{
+                releaseEl.textContent = (d.app && d.app.release_tag) ? d.app.release_tag : '–';
+            }}
 
             // 3. Telegram API
             const tg = d.telegram;
@@ -991,6 +1161,49 @@ def render_dashboard_html(data: dict) -> str:
             document.getElementById('schedRunning').textContent = sched.running ? 'Работает' : 'Остановлен';
             document.getElementById('schedRunning').style.color = sched.running ? 'var(--green)' : 'var(--red)';
             document.getElementById('schedJobsCount').textContent = sched.jobs_count;
+
+            // 7. Recent Errors & Warnings Log
+            const errs = Array.isArray(d.recent_errors) ? d.recent_errors : [];
+            const errBadge = document.getElementById('errorsBadge');
+            const errContainer = document.getElementById('errorsContainer');
+            const errHint = document.getElementById('errorsCommitHint');
+            if (errHint && d.app) {{
+                errHint.textContent = 'Коммит: ' + (d.app.commit_sha || 'latest') + ' | ' + (d.app.release_tag || '');
+            }}
+            if (errBadge && errContainer) {{
+                if (errs.length === 0) {{
+                    errBadge.className = 'badge ok';
+                    errBadge.textContent = '0 ошибок — Чисто';
+                    errContainer.innerHTML = '<div style="font-size: 13px; color: var(--green);">✅ Ошибок и предупреждений с момента запуска контейнера не зафиксировано.</div>';
+                }} else {{
+                    const hasCrit = errs.some(e => e.level === 'ERROR' || e.level === 'CRITICAL' || e.level === 'WEBHOOK');
+                    errBadge.className = 'badge ' + (hasCrit ? 'error' : 'degraded');
+                    errBadge.textContent = errs.length + ' запис.';
+                    errContainer.innerHTML = '';
+                    errs.forEach(e => {{
+                        const row = document.createElement('div');
+                        row.style.cssText = 'background: #0d121c; border: 1px solid var(--border-subtle); border-radius: 10px; padding: 10px 12px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; flex-direction: column; gap: 4px;';
+                        const top = document.createElement('div');
+                        top.style.cssText = 'display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--text-secondary);';
+                        const lvlColor = (e.level === 'ERROR' || e.level === 'CRITICAL' || e.level === 'WEBHOOK') ? 'var(--red)' : 'var(--yellow)';
+                        const leftSpan = document.createElement('span');
+                        leftSpan.innerHTML = '<strong style="color:' + lvlColor + '">[' + (e.level || 'WARN') + ']</strong> ';
+                        const srcCode = document.createElement('span');
+                        srcCode.textContent = (e.source || '') + (e.logger ? ' (' + e.logger + ')' : '');
+                        leftSpan.appendChild(srcCode);
+                        const timeSpan = document.createElement('span');
+                        timeSpan.textContent = e.timestamp || '';
+                        top.appendChild(leftSpan);
+                        top.appendChild(timeSpan);
+                        const msgDiv = document.createElement('div');
+                        msgDiv.style.cssText = 'color: var(--text-primary); word-break: break-word; white-space: pre-wrap;';
+                        msgDiv.textContent = e.message || '';
+                        row.appendChild(top);
+                        row.appendChild(msgDiv);
+                        errContainer.appendChild(row);
+                    }});
+                }}
+            }}
         }}
 
         async function triggerRefresh() {{

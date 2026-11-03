@@ -922,9 +922,27 @@ class TestCmdResetAndRebalance:
         assert len(update_calls) == 1
         assert update_calls[0][0][1] == (Decimal("1485"), 1)
 
+        # Проверяем, что транзакции НЕ удаляются через DELETE, а отвязываются через SET NULL
+        delete_tx_calls = [
+            call for call in fake_conn.execute.call_args_list
+            if "DELETE FROM transactions" in str(call[0][0])
+        ]
+        assert len(delete_tx_calls) == 0
+        null_tx_calls = [
+            call for call in fake_conn.execute.call_args_list
+            if "UPDATE transactions SET from_user_id = NULL" in str(call[0][0])
+            or "UPDATE transactions SET to_user_id = NULL" in str(call[0][0])
+        ]
+        assert len(null_tx_calls) == 2
+
         reply_text = msg.reply.call_args[0][0]
         assert "+1 485" in reply_text
         assert "возвращён в Игровую казну" in reply_text
+
+        # Проверяем блокировку /reset для обычного модератора (не SUPER_ADMIN_ID)
+        msg_non_super = make_message("/reset @testuser", user_id=777888)
+        await cmd_reset(msg_non_super)
+        assert "SUPER_ADMIN_ID" in msg_non_super.reply.call_args[0][0]
 
     @pytest.mark.asyncio
     @patch("app.handlers.admin_commands.db")

@@ -139,6 +139,11 @@ async def cmd_test(message: Message):
 @router.message(Command("reset", ignore_case=True))
 async def cmd_reset(message: Message):
     """Полное удаление пользователя из базы данных и возврат баланса в Игровую казну."""
+    from app.config import SUPER_ADMIN_ID
+    if not SUPER_ADMIN_ID or message.from_user.id != SUPER_ADMIN_ID:
+        await message.reply("❌ Команда <code>/reset</code> доступна только владельцу Игровой казны (SUPER_ADMIN_ID).", parse_mode="HTML")
+        return
+
     args = message.text.split()
     if len(args) < 2:
         await message.reply(LEXICON_RU["err_admin_reset_format"], parse_mode="HTML")
@@ -186,11 +191,26 @@ async def cmd_reset(message: Message):
             treasury_row = await cur.fetchone()
             new_treasury_balance = Decimal(str(treasury_row[0] if not isinstance(treasury_row, dict) else treasury_row['balance'])) if treasury_row else Decimal('0')
 
-            # 2. Удаляем транзакции пользователя
+            # 2. Отвязываем пользователя от исторических транзакций (SET NULL),
+            # чтобы сохранить историю переводов у контрагентов и не занижать исторический ВВП (/gdp)
             await conn.execute(
-                "DELETE FROM transactions WHERE from_user_id = %s OR to_user_id = %s",
-                (user_id, user_id)
+                "UPDATE transactions SET from_user_id = NULL WHERE from_user_id = %s",
+                (user_id,)
             )
+            await conn.execute(
+                "UPDATE transactions SET to_user_id = NULL WHERE to_user_id = %s",
+                (user_id,)
+            )
+            if user_id != treasury_id and user_balance > 0:
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (NULL, %s, %s, 'manual_add', %s)",
+                    (treasury_id, user_balance, f"Возврат остатка в казну при /reset ({username_str})")
+                )
+            elif user_id != treasury_id and user_balance < 0:
+                await conn.execute(
+                    "INSERT INTO transactions (from_user_id, to_user_id, amount, type, comment) VALUES (%s, NULL, %s, 'manual_rem', %s)",
+                    (treasury_id, abs(user_balance), f"Покрытие долга из казны при /reset ({username_str})")
+                )
 
             # 3. Удаляем логи наград по хэштегам
             await conn.execute(
@@ -235,6 +255,10 @@ async def cmd_reset(message: Message):
 @router.message(Command("rebalance", ignore_case=True))
 async def cmd_rebalance(message: Message):
     """Балансировка экономики: выравнивает общую денежную массу до Σ = 0 через Игровую казну."""
+    from app.config import SUPER_ADMIN_ID
+    if not SUPER_ADMIN_ID or message.from_user.id != SUPER_ADMIN_ID:
+        await message.reply("❌ Команда <code>/rebalance</code> доступна только владельцу Игровой казны (SUPER_ADMIN_ID).", parse_mode="HTML")
+        return
     async with db.pool.connection() as conn:
         async with conn.transaction():
             treasury_id = await db._get_or_create_treasury_id(conn)

@@ -98,7 +98,7 @@ def format_transactions_history(transactions: list, user_db_id: int) -> str:
         if tx['to_user_id'] == user_db_id:
             if tx['type'] in ('manual_add', 'welcome_bonus', 'top_up', 'tag_reward'):
                 top_ups.append(tx)
-            elif tx['type'] in ('transfer', 'fund_payment', 'purchase'):
+            elif tx['type'] in ('transfer', 'fund_payment', 'purchase', 'event_fee'):
                 incoming.append(tx)
         elif tx['from_user_id'] == user_db_id:
             if tx['type'] in ('transfer', 'event_fee', 'purchase'):

@@ -76,6 +76,8 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+from app.services.dashboard import install_dashboard_log_handler
+install_dashboard_log_handler()
 logger = logging.getLogger(__name__)
 if _removed_logs_count > 0:
     logger.info(f"Cleaned up {_removed_logs_count} old log file(s) (>7 days) from data/logs.")

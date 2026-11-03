@@ -230,21 +230,27 @@ class OfferRepository(BaseRepository):
                 active_count = row['cnt'] if row else 0
 
                 await cur.execute(
-                    """SELECT o.id, o.title, o.price, b.username as buyer_username
-                       FROM offers o
-                       JOIN users b ON o.buyer_id = b.id
-                       WHERE o.seller_id = %s AND o.status = 'sold'
-                       ORDER BY o.created_at DESC LIMIT 5""",
+                    """SELECT t.id,
+                              COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(t.comment, ''), '^Покупка товара:\s*', ''), ''), 'Товар на бирже') AS title,
+                              t.amount AS price,
+                              b.username AS buyer_username
+                       FROM transactions t
+                       LEFT JOIN users b ON t.from_user_id = b.id
+                       WHERE t.to_user_id = %s AND t.type = 'purchase'
+                       ORDER BY t.created_at DESC LIMIT 5""",
                     (user['id'],)
                 )
                 owed_by_me = await cur.fetchall()
 
                 await cur.execute(
-                    """SELECT o.id, o.title, o.price, s.username as seller_username
-                       FROM offers o
-                       JOIN users s ON o.seller_id = s.id
-                       WHERE o.buyer_id = %s AND o.status = 'sold'
-                       ORDER BY o.created_at DESC LIMIT 5""",
+                    """SELECT t.id,
+                              COALESCE(NULLIF(REGEXP_REPLACE(COALESCE(t.comment, ''), '^Покупка товара:\s*', ''), ''), 'Товар на бирже') AS title,
+                              t.amount AS price,
+                              s.username AS seller_username
+                       FROM transactions t
+                       LEFT JOIN users s ON t.to_user_id = s.id
+                       WHERE t.from_user_id = %s AND t.type = 'purchase'
+                       ORDER BY t.created_at DESC LIMIT 5""",
                     (user['id'],)
                 )
                 owed_to_me = await cur.fetchall()

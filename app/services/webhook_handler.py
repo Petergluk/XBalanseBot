@@ -55,6 +55,10 @@ async def handle_tribute_webhook(request: web.Request):
         logger.warning("Received webhook with invalid secret.")
         return web.Response(status=403)
 
+    r = None
+    payment_ref = None
+    lock_acquired = False
+    tx_committed = False
     try:
         data = await request.json()
         logger.info(f"Received Tribute webhook: {data}")
@@ -94,6 +98,7 @@ async def handle_tribute_webhook(request: web.Request):
         if not acquired:
             logger.info(f"Duplicate Tribute webhook (caught by Redis) for {payment_ref}.")
             return web.Response(status=200, text="OK (duplicate)")
+        lock_acquired = True
 
         await ensure_user_exists(telegram_id, username, is_bot=False)
 
@@ -102,10 +107,12 @@ async def handle_tribute_webhook(request: web.Request):
             exchange_rate = Decimal(exchange_rate_str)
         except (InvalidOperation, TypeError):
             logger.error(f"Invalid exchange_rate setting: {exchange_rate_str}")
+            await r.delete(payment_ref)
             return web.Response(status=500)
 
         if exchange_rate <= 0:
             logger.error(f"Non-positive exchange_rate setting: {exchange_rate_str}")
+            await r.delete(payment_ref)
             return web.Response(status=500)
 
         top_up_amount = (amount_rub * exchange_rate).quantize(Decimal('0.0001'))
@@ -154,6 +161,7 @@ async def handle_tribute_webhook(request: web.Request):
                         (top_up_amount, user_id),
                     )
 
+        tx_committed = True
         if already_processed:
             logger.info(f"Duplicate Tribute webhook ignored for {payment_ref}.")
             return web.Response(status=200, text="OK (duplicate)")
@@ -173,6 +181,11 @@ async def handle_tribute_webhook(request: web.Request):
         return web.Response(status=200, text="OK")
 
     except Exception as e:
+        if r and payment_ref and lock_acquired and not tx_committed:
+            try:
+                await r.delete(payment_ref)
+            except Exception as del_err:
+                logger.warning(f"Failed to release Redis lock {payment_ref} after webhook error: {del_err}")
         logger.exception(f"Error processing Tribute webhook: {e}")
         return web.Response(status=500)
 

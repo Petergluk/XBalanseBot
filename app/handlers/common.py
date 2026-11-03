@@ -213,6 +213,8 @@ async def process_onboarding_agree(callback: CallbackQuery):
             except Exception as e:
                 logger.warning(f"Could not send welcome bonus DM after onboarding_agree to {callback.from_user.id}: {e}")
 
+    from app.handlers.user_commands import ensure_role_bottom_keyboard
+    await ensure_role_bottom_keyboard(callback.bot, callback.from_user.id)
     await send_invite_link(callback)
 
 @router.callback_query(GeneralAction.filter(F.action == "get_invite_link"))
@@ -249,6 +251,8 @@ async def cmd_help(message: Message):
         await message.answer(help_text, parse_mode="HTML")
     else:
         user_is_admin = await is_admin(message.from_user.id)
+        from app.handlers.user_commands import ensure_role_bottom_keyboard
+        await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=user_is_admin)
         help_text = LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]).format(currency_symbol=CURRENCY_SYMBOL)
         from app.keyboards import get_user_help_keyboard
         await message.answer(
@@ -285,9 +289,15 @@ async def on_user_join(event: ChatMemberUpdated, bot: Bot):
                 currency_symbol=CURRENCY_SYMBOL,
                 username=html.escape(new_member.full_name or new_member.first_name or "Участник")
             )
+            try:
+                member_is_admin = await is_admin(new_member.id)
+            except Exception:
+                member_is_admin = False
+            from app.keyboards import get_persistent_bottom_keyboard
             await bot.send_message(
                 new_member.id,
                 bonus_text,
+                reply_markup=None if member_is_admin else get_persistent_bottom_keyboard(),
                 parse_mode="HTML"
             )
     except Exception as e:

@@ -128,6 +128,8 @@ async def _change_balance(
 
 @router.message(Command("gide", "гид", ignore_case=True))
 async def cmd_gide(message: Message):
+    from app.handlers.user_commands import ensure_role_bottom_keyboard
+    await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True)
     from app.keyboards import get_admin_help_keyboard
     gide_text = LEXICON_RU.get("help_admin_main", LEXICON_RU["gide_text"]).format(currency_symbol=CURRENCY_SYMBOL)
     await message.answer(gide_text, reply_markup=get_admin_help_keyboard("help_admin_main"), parse_mode="HTML")
@@ -451,6 +453,24 @@ async def _toggle_admin(message: Message, make_admin: bool):
         await message.reply(LEXICON_RU["msg_admin_status_already_set"].format(username=username, status=status))
         return
     await db.set_admin_status(user['telegram_id'], is_admin=make_admin)
+    try:
+        from aiogram.types import BotCommand, BotCommandScopeChat
+        from app.handlers.user_commands import ensure_role_bottom_keyboard
+        target_id = int(user['telegram_id'])
+        if make_admin:
+            admin_commands = [
+                BotCommand(command="menu", description="🤖 Главное меню"),
+                BotCommand(command="settings", description="⚙️ Настройки бота"),
+                BotCommand(command="status", description="🩺 Статус системы"),
+                BotCommand(command="gide", description="🔐 Гид администратора"),
+                BotCommand(command="help", description="📖 Справка"),
+            ]
+            await message.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=target_id))
+        else:
+            await message.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=target_id))
+        await ensure_role_bottom_keyboard(message.bot, target_id, user_is_admin=make_admin, force=True)
+    except Exception as e:
+        logger.debug(f"Could not update commands/keyboard for toggled admin {user['telegram_id']}: {e}")
     action = "назначен" if make_admin else "сняты права"
     await message.answer(LEXICON_RU["msg_admin_status_changed"].format(username=username, action=action))
 
@@ -468,6 +488,8 @@ async def cmd_remove_admin(message: Message):
 async def cmd_settings(message: Message, state: FSMContext = None):
     if state is not None:
         await state.clear()
+    from app.handlers.user_commands import ensure_role_bottom_keyboard
+    await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True)
     keyboard = await get_settings_keyboard()
     await message.answer(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
 
@@ -1171,6 +1193,8 @@ async def cmd_set_market_thread(message: Message):
 @router.message(Command("status", ignore_case=True))
 async def cmd_status(message: Message, bot: Bot, scheduler: AsyncIOScheduler = None):
     """Выводит состояние всех систем и сервисов бота."""
+    from app.handlers.user_commands import ensure_role_bottom_keyboard
+    await ensure_role_bottom_keyboard(bot, message.from_user.id, user_is_admin=True)
     wait_msg = await message.answer("⏳ <i>Опрашиваю сервисы (Koyeb, Supabase, Upstash, Telegram)...</i>", parse_mode="HTML")
     try:
         from app.services.dashboard import get_system_status, format_telegram_status, get_dashboard_url

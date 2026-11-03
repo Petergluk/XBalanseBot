@@ -609,8 +609,8 @@ def get_user_help_keyboard(active_section: str = "help_user_main", is_admin: boo
     grid_items = [
         ("help_user_economy", "💡 Орфы и Демерредж"),
         ("help_user_activities", "🎨 Активности и События"),
-        ("help_user_rewards", "🎁 Награды и Овердрафт"),
-        ("help_user_commands", "📦 Обмен и Команды"),
+        ("help_user_rewards", "🎁 Игромаркет"),
+        ("help_user_commands", "📦 Все команды"),
     ]
     btns = []
     for key, label in grid_items:
@@ -656,19 +656,13 @@ def get_admin_help_keyboard(active_section: str = "help_admin_main") -> InlineKe
 
 def get_persistent_bottom_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """
-    Создаёт постоянную компактную клавиатуру внизу под строкой ввода (в 1 клик):
-    - Для обычных пользователей: одна кнопка «🏠 Главное меню».
-    - Для администраторов: 4 кнопки быстрого доступа («🏠 Главное меню», «⚙️ Настройки», «🩺 Статус», «🔐 Гид админа»).
+    Создаёт постоянную компактную клавиатуру внизу под строкой ввода (в 1 клик)
+    для обычных пользователей: одна кнопка «🏠 Главное меню».
+    Для администраторов нижние кнопки не используются (у них активно меню команд /).
     """
-    if is_admin:
-        rows = [
-            [KeyboardButton(text="🏠 Главное меню"), KeyboardButton(text="⚙️ Настройки")],
-            [KeyboardButton(text="🩺 Статус"), KeyboardButton(text="🔐 Гид админа")],
-        ]
-    else:
-        rows = [
-            [KeyboardButton(text="🏠 Главное меню")],
-        ]
+    rows = [
+        [KeyboardButton(text="🏠 Главное меню")],
+    ]
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

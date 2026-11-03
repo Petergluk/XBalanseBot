@@ -234,24 +234,21 @@ async def setup_bot_commands(bot: Bot):
         BotCommandScopeChat,
     )
 
-    # Команды для личных сообщений с ботом (минималистичное меню без терминальной перегрузки)
-    user_commands = [
-        BotCommand(command="menu", description="🤖 Главное меню"),
-    ]
-    # Команды, которые реально работают внутри группового чата
+    # Для обычных пользователей в ЛС убираем меню команд (чтобы не требовалось 2 клика через «Меню -> /menu»):
+    # у обычных пользователей внизу экрана закреплена компактная 1-кликовая кнопка «🏠 Главное меню».
     group_commands = [
         BotCommand(command="donate", description="💝 Поблагодарить автора поста орфами"),
         BotCommand(command="send", description="💸 Быстрый перевод (@user сумма)"),
         BotCommand(command="gdp", description="📊 Экономика сообщества"),
         BotCommand(command="help", description="📖 Справка по командам в группе"),
     ]
-    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
     try:
-        await bot.set_my_commands(user_commands, scope=BotCommandScopeAllPrivateChats())
+        await bot.delete_my_commands(scope=BotCommandScopeDefault())
+        await bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
         await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
     except Exception as e:
-        logger.warning(f"Could not set scoped commands: {e}")
-    logger.info(f"Bot commands set: {len(user_commands)} private commands, {len(group_commands)} group commands.")
+        logger.warning(f"Could not configure scoped commands: {e}")
+    logger.info(f"Bot commands set: 0 private user commands (button-only), {len(group_commands)} group commands.")
 
     # Расширенные команды для всех администраторов и супер-админа
     admin_commands = [

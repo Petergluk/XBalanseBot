@@ -41,7 +41,48 @@ from app.utils import (ensure_user_exists, format_amount,
 from app.callbacks import GeneralAction, TransferAction, HelpAction
 
 router = Router()
-_bottom_kb_role_cache: dict[int, bool] = {}
+_bottom_kb_role_cache: dict[int, str] = {}
+
+
+async def ensure_role_bottom_keyboard(bot: Bot, user_id: int, user_is_admin: bool | None = None, force: bool = False):
+    """
+    Гарантирует правильный режим интерфейса в ЛС:
+    - Для обычного пользователя: закрепляет единственную нижнюю кнопку «🏠 Главное меню» (1 клик)
+      и очищает персональный список команд (если он был закэширован).
+    - Для администратора: удаляет нижние кнопки (ReplyKeyboardRemove), оставляя только команды /.
+    """
+    try:
+        if user_is_admin is None:
+            user_is_admin = await is_admin(user_id)
+        target_role = "admin" if user_is_admin else "user"
+        if not force and _bottom_kb_role_cache.get(user_id) == target_role:
+            return
+        _bottom_kb_role_cache[user_id] = target_role
+        if user_is_admin:
+            from aiogram.types import ReplyKeyboardRemove
+            await bot.send_message(
+                user_id,
+                "⌨️ <i>Нижняя панель кнопок убрана (для администратора активно меню команд).</i>",
+                reply_markup=ReplyKeyboardRemove(),
+                parse_mode="HTML",
+                disable_notification=True,
+            )
+        else:
+            from aiogram.types import BotCommandScopeChat
+            from app.keyboards import get_persistent_bottom_keyboard
+            try:
+                await bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=user_id))
+            except Exception:
+                pass
+            await bot.send_message(
+                user_id,
+                "⌨️ <i>Быстрая кнопка меню закреплена внизу экрана.</i>",
+                reply_markup=get_persistent_bottom_keyboard(),
+                parse_mode="HTML",
+                disable_notification=True,
+            )
+    except Exception as e:
+        logger.debug(f"Could not sync bottom keyboard for {user_id}: {e}")
 logger = logging.getLogger(__name__)
 
 
@@ -189,21 +230,8 @@ async def show_main_menu(message: Message | CallbackQuery):
 
     keyboard = get_main_menu_keyboard(is_member=is_member, invite_link=invite_link)
 
-    # Закрепляем постоянную нижнюю кнопку (1 для юзера, 4 для админа), если ещё не закреплена для этой роли
-    try:
-        user_is_admin = await is_admin(user_id)
-        if _bottom_kb_role_cache.get(user_id) is not user_is_admin:
-            from app.keyboards import get_persistent_bottom_keyboard
-            _bottom_kb_role_cache[user_id] = user_is_admin
-            await bot.send_message(
-                user_id,
-                "⌨️ <i>Быстрая кнопка меню закреплена внизу экрана.</i>",
-                reply_markup=get_persistent_bottom_keyboard(is_admin=user_is_admin),
-                parse_mode="HTML",
-                disable_notification=True,
-            )
-    except Exception as e:
-        logger.debug(f"Could not attach persistent bottom keyboard for {user_id}: {e}")
+    # Для обычного пользователя закрепляем 1 нижнюю кнопку, а у админа убираем нижние кнопки
+    await ensure_role_bottom_keyboard(bot, user_id)
 
     if isinstance(message, Message):
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -229,6 +257,8 @@ async def handle_bottom_btn_main_menu(message: Message, state: FSMContext = None
         await message.delete()
     except Exception:
         pass
+    if await is_admin(message.from_user.id):
+        await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True, force=True)
     await show_main_menu(message)
 
 
@@ -240,6 +270,7 @@ async def handle_bottom_btn_settings(message: Message, state: FSMContext = None)
         await message.delete()
     except Exception:
         pass
+    await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True, force=True)
     from app.handlers.admin_commands import cmd_settings
     await cmd_settings(message)
 
@@ -252,6 +283,7 @@ async def handle_bottom_btn_status(message: Message, state: FSMContext = None, s
         await message.delete()
     except Exception:
         pass
+    await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True, force=True)
     from app.handlers.admin_commands import cmd_status
     await cmd_status(message, bot=message.bot, scheduler=scheduler)
 
@@ -264,6 +296,7 @@ async def handle_bottom_btn_gide(message: Message, state: FSMContext = None):
         await message.delete()
     except Exception:
         pass
+    await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True, force=True)
     from app.handlers.admin_commands import cmd_gide
     await cmd_gide(message)
 

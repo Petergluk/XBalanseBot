@@ -632,11 +632,18 @@ def get_user_help_keyboard(active_section: str = "help_user_main", is_admin: boo
 def get_admin_help_keyboard(active_section: str = "help_admin_main") -> InlineKeyboardMarkup:
     """Создает модульную клавиатуру для справки администратора (/gide)."""
     builder = InlineKeyboardBuilder()
+    main_mark = "• " if active_section == "help_admin_main" else ""
+    builder.row(
+        InlineKeyboardButton(
+            text=f"{main_mark}🔐 Устройство бота (Главная)",
+            callback_data=HelpAction(section="help_admin_main").pack()
+        )
+    )
     admin_items = [
-        ("help_admin_main", "🔐 Обзор админа"),
-        ("help_admin_treasury", "🏛 Казна и Балансы"),
-        ("help_admin_activities", "🎯 Активности и Рассылки"),
-        ("help_admin_settings", "⚙️ Настройки и #Тэги"),
+        ("help_admin_treasury", "🏛 Казна и Фонд (ID=0)"),
+        ("help_admin_activities", "📅 Активности и События"),
+        ("help_admin_settings", "⚙️ Автоматика и Бонусы"),
+        ("help_admin_commands", "📦 Все команды"),
     ]
     btns = []
     for key, label in admin_items:

@@ -30,7 +30,7 @@ from app.handlers import activity_handlers as act_handlers
 from app.handlers import event_handlers as event_handlers
 from app.keyboards import (get_back_to_settings_keyboard, get_settings_keyboard)
 from app.states import AdminEditStates, TagRuleCreationStates
-from app.utils import (format_amount, format_transactions_history, is_admin)
+from app.utils import (format_amount, format_help_text, format_transactions_history, is_admin)
 from app.callbacks import (
     GeneralAction, ActivityAction, EventCreationAction, SettingsAction
 )
@@ -131,7 +131,7 @@ async def cmd_gide(message: Message):
     from app.handlers.user_commands import ensure_role_bottom_keyboard
     await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=True)
     from app.keyboards import get_admin_help_keyboard
-    gide_text = LEXICON_RU.get("help_admin_main", LEXICON_RU["gide_text"]).format(currency_symbol=CURRENCY_SYMBOL)
+    gide_text = await format_help_text(LEXICON_RU.get("help_admin_main", LEXICON_RU["gide_text"]))
     await message.answer(gide_text, reply_markup=get_admin_help_keyboard("help_admin_main"), parse_mode="HTML")
 
 @router.message(Command("test", ignore_case=True))

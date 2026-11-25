@@ -37,7 +37,8 @@ from app.states import TransferStates
 from app.utils import (ensure_user_exists, format_amount,
                        format_transactions_history, get_transaction_count,
                        get_user_balance, is_admin, validate_amount,
-                       add_message_id_to_state, check_is_group_member, get_next_run_time)
+                       add_message_id_to_state, check_is_group_member, get_next_run_time,
+                       format_help_text)
 from app.callbacks import GeneralAction, TransferAction, HelpAction
 
 router = Router()
@@ -349,7 +350,7 @@ async def process_menu_help(callback: CallbackQuery):
     from app.lexicon import LEXICON_RU
     from app.keyboards import get_user_help_keyboard
     user_is_admin = await is_admin(callback.from_user.id)
-    help_text = LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]).format(currency_symbol=CURRENCY_SYMBOL)
+    help_text = await format_help_text(LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]))
     await callback.message.edit_text(
         help_text,
         reply_markup=get_user_help_keyboard("help_user_main", is_admin=user_is_admin),
@@ -368,7 +369,7 @@ async def process_help_section(callback: CallbackQuery, callback_data: HelpActio
         await callback.answer("❌ Доступно только администраторам.", show_alert=True)
         return
     raw_text = LEXICON_RU.get(section_key, LEXICON_RU.get("help_user_main", ""))
-    formatted = raw_text.format(currency_symbol=CURRENCY_SYMBOL)
+    formatted = await format_help_text(raw_text)
     if section_key.startswith("help_admin_"):
         kb = get_admin_help_keyboard(section_key)
     else:

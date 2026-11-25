@@ -68,6 +68,41 @@ def format_amount(amount: Decimal) -> str:
         
     return s
 
+
+def format_demurrage_rate(rate_val: str | int | float | Decimal | None, default: str = "1") -> str:
+    """Форматирует ставку демерреджа из настроек БД ('1.0' -> '1', '0.1' -> '0.1', '2.50' -> '2.5')."""
+    if rate_val is None:
+        return default
+    raw_str = str(rate_val).strip().replace(",", ".")
+    if not raw_str:
+        return default
+    try:
+        dec = Decimal(raw_str)
+        return format_amount(dec)
+    except (InvalidOperation, ValueError):
+        return default
+
+
+async def get_demurrage_rate_display() -> str:
+    """Получает текущий процент демерреджа из настроек БД и форматирует его для справки."""
+    try:
+        raw_rate = await db.get_setting("demurrage_rate", "1.0")
+    except Exception as e:
+        logger.warning(f"Failed to read demurrage_rate setting for help text: {e}")
+        return "1"
+    return format_demurrage_rate(raw_rate, default="1")
+
+
+async def format_help_text(template_str: str, **extra_kwargs) -> str:
+    """Подставляет currency_symbol, demurrage_rate и доп. переменные в текст справки."""
+    demurrage_rate = await get_demurrage_rate_display()
+    params = {
+        "currency_symbol": CURRENCY_SYMBOL,
+        "demurrage_rate": demurrage_rate,
+        **extra_kwargs,
+    }
+    return template_str.format(**params)
+
 def validate_amount(text: str, max_value: Decimal = Decimal('1000000')) -> Decimal:
     """
     Парсит и валидирует целочисленную сумму в орфах (1 Ӫ неделим).

@@ -30,7 +30,7 @@ from app.config import CURRENCY_SYMBOL, MAIN_GROUP_ID
 from app.lexicon import LEXICON_RU
 from app.database import db
 from app.handlers.user_commands import show_main_menu
-from app.utils import ensure_user_exists, format_amount, is_admin, check_is_group_member, safe_format_template
+from app.utils import ensure_user_exists, format_amount, is_admin, check_is_group_member, safe_format_template, format_help_text
 from app.callbacks import GeneralAction
 
 router = Router()
@@ -247,13 +247,13 @@ async def cmd_help(message: Message):
     if message.chat.type in ('group', 'supergroup'):
         help_text = LEXICON_RU["help_group"]
         bot_info = await message.bot.get_me()
-        help_text = help_text.format(bot_username=bot_info.username, currency_symbol=CURRENCY_SYMBOL)
+        help_text = await format_help_text(help_text, bot_username=bot_info.username)
         await message.answer(help_text, parse_mode="HTML")
     else:
         user_is_admin = await is_admin(message.from_user.id)
         from app.handlers.user_commands import ensure_role_bottom_keyboard
         await ensure_role_bottom_keyboard(message.bot, message.from_user.id, user_is_admin=user_is_admin)
-        help_text = LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]).format(currency_symbol=CURRENCY_SYMBOL)
+        help_text = await format_help_text(LEXICON_RU.get("help_user_main", LEXICON_RU["help_user"]))
         from app.keyboards import get_user_help_keyboard
         await message.answer(
             help_text,

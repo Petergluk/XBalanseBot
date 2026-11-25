@@ -35,6 +35,7 @@ class AdminEditStates(StatesGroup):
     waiting_for_reminder_text = State()
     waiting_for_activities_description = State()
     waiting_for_welcome_bonus_text = State()
+    waiting_for_digest_time = State()
 
 class FundPaymentStates(StatesGroup):
     """Состояния для процесса выплаты из фонда."""

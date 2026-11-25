@@ -199,13 +199,20 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
     """
     Шаг 3: Показывает детали конкретного события и кнопки управления регистрацией.
     """
-    event_id = callback_data.event_id
-    user_telegram_id = callback.from_user.id
+    await show_event_card(callback, callback_data.event_id)
+
+
+async def show_event_card(target: Message | CallbackQuery, event_id: int):
+    """Универсально отображает карточку события (из колбэка или по deep-link /start event_N)."""
+    user_telegram_id = target.from_user.id
     user_is_admin = await is_admin(user_telegram_id)
 
     event = await db.get_event(event_id)
     if not event:
-        await callback.answer(LEXICON_RU["err_event_not_found"], show_alert=True)
+        if isinstance(target, CallbackQuery):
+            await target.answer(LEXICON_RU["err_event_not_found"], show_alert=True)
+        else:
+            await target.answer(LEXICON_RU["err_event_not_found"])
         return
 
     next_run_dt = get_next_run_time(
@@ -223,8 +230,14 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
             )
         kb.row(InlineKeyboardButton(text="⬅️ Назад к активности", callback_data=ActivityAction(action="view", activity_id=event['activity_id']).pack()))
 
-        await callback.message.edit_text(text, reply_markup=kb.as_markup())
-        await callback.answer()
+        if isinstance(target, CallbackQuery):
+            await target.message.edit_text(text, reply_markup=kb.as_markup())
+            try:
+                await target.answer()
+            except Exception:
+                pass
+        else:
+            await target.answer(text, reply_markup=kb.as_markup())
         return
 
     next_run_date = next_run_dt.date()
@@ -299,12 +312,19 @@ async def _view_event_from_activity(callback: CallbackQuery, callback_data: Even
             user_is_admin,
             single_cost_str=f"{single_cost_str} {CURRENCY_SYMBOL}"
         )
-    try:
-        await callback.message.edit_text("\n".join(text_parts), reply_markup=keyboard, parse_mode="HTML")
-    except TelegramBadRequest as e:
-        logger.warning(f"Message not modified on event selection: {e}")
-    finally:
-        await callback.answer()
+    full_text = "\n".join(text_parts)
+    if isinstance(target, CallbackQuery):
+        try:
+            await target.message.edit_text(full_text, reply_markup=keyboard, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            logger.warning(f"Message not modified on event selection: {e}")
+        finally:
+            try:
+                await target.answer()
+            except Exception:
+                pass
+    else:
+        await target.answer(full_text, reply_markup=keyboard, parse_mode="HTML")
 
 @router.callback_query(ActivityAction.filter(F.action == "unsubscribe_confirm"))
 async def process_unsubscribe_confirm(callback: CallbackQuery, callback_data: ActivityAction):

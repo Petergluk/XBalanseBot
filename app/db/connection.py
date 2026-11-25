@@ -79,7 +79,14 @@ class ConnectionManager(BaseRepository):
                     'demurrage_interval_days': '1',
                     'demurrage_last_run': '1970-01-01',
                     'welcome_group_enabled': '1',
-                    'bonus_source_mode': 'stepwise'
+                    'bonus_source_mode': 'stepwise',
+                    'events_digest_thread_id': '0',
+                    'events_digest_enabled': '0',
+                    'events_digest_weekday': '0',
+                    'events_digest_hour': '9',
+                    'events_digest_minute': '0',
+                    'events_digest_last_pinned_msg_id': '',
+                    'events_digest_last_sent_date': ''
                 }
 
                 for key, value in default_settings.items():

@@ -20,8 +20,8 @@ import logging
 from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, F, Router
-from aiogram.filters import (ChatMemberUpdatedFilter, Command, CommandStart,
-                             StateFilter, JOIN_TRANSITION)
+from aiogram.filters import (ChatMemberUpdatedFilter, Command, CommandObject,
+                             CommandStart, StateFilter, JOIN_TRANSITION)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import any_state
 from aiogram.types import CallbackQuery, ChatMemberUpdated, Message
@@ -102,18 +102,47 @@ async def send_onboarding_prompt(target: Message | CallbackQuery):
         await target.answer(welcome_text, reply_markup=get_onboarding_keyboard(), parse_mode="HTML")
 
 
+async def _route_start_payload(target: Message | CallbackQuery, payload: str, user_is_admin: bool = False) -> bool:
+    """Открывает целевой раздел бота по deep-link параметру (?start=events / activities / event_12)."""
+    if not payload:
+        return False
+
+    from app.handlers.user_commands import ensure_role_bottom_keyboard
+    await ensure_role_bottom_keyboard(target.bot, target.from_user.id, user_is_admin=user_is_admin)
+
+    if payload == "events":
+        from app.handlers.event_handlers import cmd_event
+        await cmd_event(target)
+        return True
+    if payload == "activities":
+        from app.handlers.activity_handlers import show_activities_list
+        await show_activities_list(target)
+        return True
+    if payload.startswith("event_"):
+        raw_id = payload.removeprefix("event_").strip()
+        if raw_id.isdigit():
+            from app.handlers.activity_handlers import show_event_card
+            await show_event_card(target, int(raw_id))
+            return True
+        from app.handlers.event_handlers import cmd_event
+        await cmd_event(target)
+        return True
+    return False
+
+
 @router.message(CommandStart(ignore_case=True))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject = None):
     """
-    Обработчик команды /start.
+    Обработчик команды /start (включая deep-link переходы из еженедельной афиши).
     Новые пользователи, ещё не состоящие в группе и не принявшие правила,
     не записываются в БД до нажатия кнопки «Я согласен с правилами».
     """
     if message.from_user.is_bot:
         return
 
+    payload = (command.args or "").strip() if command else ""
     await state.clear()
-    logger.info(f"User {message.from_user.id} (@{message.from_user.username}) started bot")
+    logger.info(f"User {message.from_user.id} (@{message.from_user.username}) started bot (payload={payload!r})")
 
     from app.config import SUPER_ADMIN_ID
     user = await db.get_user(telegram_id=message.from_user.id)
@@ -122,6 +151,8 @@ async def cmd_start(message: Message, state: FSMContext):
     if is_new and message.from_user.id != SUPER_ADMIN_ID:
         is_member = await check_is_group_member(message.bot, message.from_user.id)
         if not is_member:
+            if payload:
+                await state.update_data(start_payload=payload)
             await send_onboarding_prompt(message)
             logger.info(f"Sent onboarding message to new unverified user {message.from_user.id}")
             return
@@ -136,11 +167,16 @@ async def cmd_start(message: Message, state: FSMContext):
             logger.info(f"Super admin {SUPER_ADMIN_ID} re-promoted via /start")
 
     if not is_new:
+        user_is_admin = bool((user and user.get("is_admin")) or message.from_user.id == SUPER_ADMIN_ID)
+        if payload and await _route_start_payload(message, payload, user_is_admin=user_is_admin):
+            return
         from app.handlers.user_commands import show_main_menu
         await show_main_menu(message)
         return
 
     # Если пользователь уже был в группе, но впервые запустил бота
+    if payload:
+        await state.update_data(start_payload=payload)
     await send_onboarding_prompt(message)
     logger.info(f"Sent onboarding message to new user {message.from_user.id}")
 
@@ -192,13 +228,18 @@ async def send_invite_link(target: Message | CallbackQuery):
             await target.answer(text)
 
 @router.callback_query(GeneralAction.filter(F.action == "onboarding_agree"))
-async def process_onboarding_agree(callback: CallbackQuery):
-    """Обработка нажатия кнопки 'Согласен': регистрирует пользователя и выдаёт инвайт-ссылку."""
+async def process_onboarding_agree(callback: CallbackQuery, state: FSMContext):
+    """Обработка нажатия кнопки 'Согласен': регистрирует пользователя и выдаёт инвайт-ссылку или открывает deep-link."""
     await callback.answer()
+    data = await state.get_data()
+    start_payload = (data.get("start_payload") or "").strip()
+    await state.clear()
+
     await ensure_user_exists(callback.from_user.id, callback.from_user.username, callback.from_user.is_bot)
 
+    is_member = await check_is_group_member(callback.bot, callback.from_user.id)
     # Если участник уже состоит в группе на момент принятия правил — начисляем велком-бонус (если ещё не получал)
-    if await check_is_group_member(callback.bot, callback.from_user.id):
+    if is_member:
         credited = await _credit_welcome_bonus(callback.from_user.id, "Велком-бонус после принятия правил")
         if credited > 0:
             bonus_text_template = await db.get_setting('welcome_bonus_message', LEXICON_RU["default_welcome_bonus"])
@@ -214,7 +255,13 @@ async def process_onboarding_agree(callback: CallbackQuery):
                 logger.warning(f"Could not send welcome bonus DM after onboarding_agree to {callback.from_user.id}: {e}")
 
     from app.handlers.user_commands import ensure_role_bottom_keyboard
-    await ensure_role_bottom_keyboard(callback.bot, callback.from_user.id)
+    user_is_admin = await is_admin(callback.from_user.id)
+    await ensure_role_bottom_keyboard(callback.bot, callback.from_user.id, user_is_admin=user_is_admin)
+
+    if start_payload and is_member:
+        if await _route_start_payload(callback, start_payload, user_is_admin=user_is_admin):
+            return
+
     await send_invite_link(callback)
 
 @router.callback_query(GeneralAction.filter(F.action == "get_invite_link"))

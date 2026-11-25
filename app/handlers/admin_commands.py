@@ -20,7 +20,7 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, CallbackQuery, User
+from aiogram.types import Message, CallbackQuery, User, InlineKeyboardMarkup
 from psycopg.rows import dict_row
 
 from app.config import CURRENCY_SYMBOL, SUPER_ADMIN_ID
@@ -462,8 +462,6 @@ async def _toggle_admin(message: Message, make_admin: bool):
                 BotCommand(command="menu", description="🤖 Главное меню"),
                 BotCommand(command="settings", description="⚙️ Настройки бота"),
                 BotCommand(command="status", description="🩺 Статус системы"),
-                BotCommand(command="gide", description="🔐 Гид администратора"),
-                BotCommand(command="help", description="📖 Справка"),
             ]
             await message.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=target_id))
         else:
@@ -483,6 +481,50 @@ async def cmd_remove_admin(message: Message):
     await _toggle_admin(message, make_admin=False)
 
 # --- SETTINGS MANAGEMENT ---
+
+async def _build_topics_settings_view(extra_note: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    from app.services.events_digest import WEEKDAYS_FULL_RU, WEEKDAYS_SHORT_RU
+    from app.keyboards import get_topics_settings_keyboard
+
+    market_thread_id = await db.get_setting("market_thread_id", "0")
+    market_topic_status = (
+        f"ID {market_thread_id} (привязан ✅)"
+        if market_thread_id and str(market_thread_id) != "0"
+        else "Общий чат (General)"
+    )
+
+    digest_thread_id = await db.get_setting("events_digest_thread_id", "0")
+    digest_topic_status = (
+        f"ID {digest_thread_id} (привязан ✅)"
+        if digest_thread_id and str(digest_thread_id) != "0"
+        else "Общий чат (General)"
+    )
+
+    digest_enabled = (await db.get_setting("events_digest_enabled", "0")) == "1"
+    digest_status = "Включена ✅" if digest_enabled else "Выключена 🔕"
+
+    weekday_raw = await db.get_setting("events_digest_weekday", "0")
+    hour_raw = await db.get_setting("events_digest_hour", "9")
+    minute_raw = await db.get_setting("events_digest_minute", "0")
+    wd = int(weekday_raw) if str(weekday_raw).isdigit() and 0 <= int(weekday_raw) <= 6 else 0
+    hh = int(hour_raw) if str(hour_raw).isdigit() and 0 <= int(hour_raw) <= 23 else 9
+    mm = int(minute_raw) if str(minute_raw).isdigit() and 0 <= int(minute_raw) <= 59 else 0
+
+    digest_schedule = f"{WEEKDAYS_FULL_RU[wd]}, {hh:02d}:{mm:02d} МСК"
+    text = LEXICON_RU["msg_admin_topics_status"].format(
+        market_topic_status=market_topic_status,
+        digest_topic_status=digest_topic_status,
+        digest_status=digest_status,
+        digest_schedule=digest_schedule,
+    )
+    if extra_note:
+        text += extra_note
+    kb = get_topics_settings_keyboard(
+        digest_enabled=digest_enabled,
+        weekday_label=WEEKDAYS_SHORT_RU[wd],
+        time_label=f"{hh:02d}:{mm:02d}",
+    )
+    return text, kb
 
 @router.message(Command("settings", ignore_case=True), StateFilter("*"))
 async def cmd_settings(message: Message, state: FSMContext = None):
@@ -574,17 +616,97 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         await callback.answer()
 
     elif action == "menu_topics":
-        market_thread_id = await db.get_setting("market_thread_id", "0")
-        topic_status = f"ID {market_thread_id}" if market_thread_id != "0" else "Общий чат (General)"
-        text = LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
-        from app.keyboards import get_topics_settings_keyboard
-        kb = get_topics_settings_keyboard()
+        text, kb = await _build_topics_settings_view()
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         try:
             await db.set_setting("admin_topics_msg_ref", f"{callback.message.chat.id}:{callback.message.message_id}")
         except Exception:
             pass
         await callback.answer()
+
+    elif action == "toggle_events_digest":
+        is_on = callback_data.enabled
+        await db.set_setting("events_digest_enabled", "1" if is_on else "0")
+        text, kb = await _build_topics_settings_view()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer("🔔 Авто-афиша включена!" if is_on else "🔕 Авто-афиша выключена.")
+
+    elif action == "menu_digest_schedule":
+        weekday_raw = await db.get_setting("events_digest_weekday", "0")
+        hour_raw = await db.get_setting("events_digest_hour", "9")
+        minute_raw = await db.get_setting("events_digest_minute", "0")
+        wd = int(weekday_raw) if str(weekday_raw).isdigit() and 0 <= int(weekday_raw) <= 6 else 0
+        hh = int(hour_raw) if str(hour_raw).isdigit() and 0 <= int(hour_raw) <= 23 else 9
+        mm = int(minute_raw) if str(minute_raw).isdigit() and 0 <= int(minute_raw) <= 59 else 0
+        from app.services.events_digest import WEEKDAYS_FULL_RU
+        from app.keyboards import get_digest_schedule_keyboard
+        sched_text = (
+            "🗓 <b>Расписание еженедельной афиши событий</b>\n\n"
+            f"Текущее время публикации: <b>{WEEKDAYS_FULL_RU[wd]}, {hh:02d}:{mm:02d} МСК</b>\n\n"
+            "Выберите день недели и время ниже:"
+        )
+        await callback.message.edit_text(sched_text, reply_markup=get_digest_schedule_keyboard(wd), parse_mode="HTML")
+        await callback.answer()
+
+    elif action.startswith("set_digest_day_"):
+        day_str = action.replace("set_digest_day_", "")
+        if day_str.isdigit() and 0 <= int(day_str) <= 6:
+            await db.set_setting("events_digest_weekday", day_str)
+            wd = int(day_str)
+            hour_raw = await db.get_setting("events_digest_hour", "9")
+            minute_raw = await db.get_setting("events_digest_minute", "0")
+            hh = int(hour_raw) if str(hour_raw).isdigit() and 0 <= int(hour_raw) <= 23 else 9
+            mm = int(minute_raw) if str(minute_raw).isdigit() and 0 <= int(minute_raw) <= 59 else 0
+            from app.services.events_digest import WEEKDAYS_FULL_RU
+            from app.keyboards import get_digest_schedule_keyboard
+            sched_text = (
+                "🗓 <b>Расписание еженедельной афиши событий</b>\n\n"
+                f"Текущее время публикации: <b>{WEEKDAYS_FULL_RU[wd]}, {hh:02d}:{mm:02d} МСК</b>\n\n"
+                "Выберите день недели и время ниже:"
+            )
+            await callback.message.edit_text(sched_text, reply_markup=get_digest_schedule_keyboard(wd), parse_mode="HTML")
+            await callback.answer(f"✅ День установлен: {WEEKDAYS_FULL_RU[wd]}")
+        else:
+            await callback.answer("Некорректный день недели.")
+
+    elif action.startswith("set_digest_time_"):
+        hhmm = action.replace("set_digest_time_", "")
+        if len(hhmm) == 4 and hhmm.isdigit():
+            hh = int(hhmm[:2])
+            mm = int(hhmm[2:])
+            await db.set_setting("events_digest_hour", str(hh))
+            await db.set_setting("events_digest_minute", str(mm))
+            text, kb = await _build_topics_settings_view()
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            await callback.answer(f"✅ Время публикации: {hh:02d}:{mm:02d} МСК")
+        else:
+            await callback.answer("Некорректное время.")
+
+    elif action == "prompt_digest_time":
+        await state.set_state(AdminEditStates.waiting_for_digest_time)
+        from app.keyboards import get_cancel_dialog_keyboard
+        await callback.message.edit_text(
+            LEXICON_RU["msg_admin_prompt_digest_time"],
+            reply_markup=get_cancel_dialog_keyboard(),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+
+    elif action == "post_digest_now":
+        from app.services.events_digest import publish_weekly_events_digest
+        res = await publish_weekly_events_digest(callback.bot, force=True)
+        if res.get("ok"):
+            pin_note = " и закреплено" if res.get("pinned") else " (без закрепа — проверьте права бота)"
+            await callback.answer(
+                f"✅ Опубликовано событий: {res['events_count']}{pin_note}!",
+                show_alert=True,
+            )
+        elif res.get("reason") == "no_events":
+            await callback.answer("ℹ️ На ближайшие 7 дней нет предстоящих событий.", show_alert=True)
+        elif res.get("reason") == "no_main_group":
+            await callback.answer("❌ MAIN_GROUP_ID не настроен в окружении бота.", show_alert=True)
+        else:
+            await callback.answer(f"❌ Не удалось опубликовать: {res.get('reason')}", show_alert=True)
 
     elif action == "menu_bonus_source" or action.startswith("set_bonus_source_"):
         if action.startswith("set_bonus_source_"):
@@ -608,6 +730,18 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
         kb = get_bonus_source_settings_keyboard(current_mode)
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
+    elif action == "reset_market_thread":
+        await db.set_setting("market_thread_id", "0")
+        await callback.answer(LEXICON_RU["msg_admin_topics_reset_success"])
+        text, kb = await _build_topics_settings_view()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+    elif action == "reset_digest_thread":
+        await db.set_setting("events_digest_thread_id", "0")
+        await callback.answer(LEXICON_RU["msg_admin_digest_thread_reset_success"])
+        text, kb = await _build_topics_settings_view()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
     elif action.startswith("reset_"):
         setting_key = action.replace("reset_", "")
         if setting_key in prompts:
@@ -619,15 +753,6 @@ async def process_settings_callbacks(callback: CallbackQuery, state: FSMContext,
             await callback.message.edit_text(LEXICON_RU["msg_admin_settings_menu"], reply_markup=keyboard, parse_mode="HTML")
         else:
             await callback.answer("Ошибка: Настройка не найдена.")
-
-    elif action == "reset_market_thread":
-        await db.set_setting("market_thread_id", "0")
-        await callback.answer(LEXICON_RU["msg_admin_topics_reset_success"])
-        topic_status = "Общий чат (General)"
-        text = LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
-        from app.keyboards import get_topics_settings_keyboard
-        kb = get_topics_settings_keyboard()
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
     elif action == "toggle_demurrage":
         is_on = callback_data.enabled
@@ -734,6 +859,35 @@ async def process_activities_description_update(message: Message, state: FSMCont
 @router.message(AdminEditStates.waiting_for_welcome_bonus_text)
 async def process_welcome_bonus_text(message: Message, state: FSMContext):
     await _update_setting_and_finish(message, state, 'welcome_bonus_message')
+
+
+@router.message(AdminEditStates.waiting_for_digest_time)
+async def process_digest_time_input(message: Message, state: FSMContext):
+    raw = (message.text or "").strip()
+    if raw.lower() == "cancel" or raw.startswith("/"):
+        await state.clear()
+        await message.answer(LEXICON_RU["msg_action_cancelled_plain"])
+        from app.handlers.user_commands import show_main_menu
+        await show_main_menu(message)
+        return
+
+    normalized = raw.replace(".", ":").replace("-", ":")
+    parts = [p.strip() for p in normalized.split(":")]
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        await message.reply(LEXICON_RU["err_admin_digest_time_format"])
+        return
+    hh, mm = int(parts[0]), int(parts[1])
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        await message.reply(LEXICON_RU["err_admin_digest_time_format"])
+        return
+
+    await db.set_setting("events_digest_hour", str(hh))
+    await db.set_setting("events_digest_minute", str(mm))
+    await state.clear()
+    text, kb = await _build_topics_settings_view(
+        extra_note=f"\n\n✅ <b>Время публикации обновлено:</b> {hh:02d}:{mm:02d} МСК."
+    )
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 # --- ACTIVITY/EVENT MANAGEMENT CALLBACKS ---
 
@@ -1169,25 +1323,98 @@ async def cmd_set_market_thread(message: Message):
     except Exception:
         pass
 
-    # 3. Автоматически обновляем открытое окно «Привязка топика Игромаркета» в ЛС с ботом
+    # 3. Автоматически обновляем открытое окно «Топики и сводка событий» в ЛС с ботом
     try:
         ref = await db.get_setting("admin_topics_msg_ref", "")
         if ref and ":" in ref:
             ref_chat_id_str, ref_msg_id_str = ref.split(":", 1)
-            from app.keyboards import get_topics_settings_keyboard
-            updated_text = (
-                LEXICON_RU["msg_admin_topics_status"].format(topic_status=topic_status)
-                + f"\n\n✅ <b>Обновлено только что:</b> привязан <b>{topic_status}</b>."
+            updated_text, updated_kb = await _build_topics_settings_view(
+                extra_note=f"\n\n✅ <b>Обновлено только что (Игромаркет):</b> {topic_status}."
             )
             await message.bot.edit_message_text(
                 chat_id=int(ref_chat_id_str),
                 message_id=int(ref_msg_id_str),
                 text=updated_text,
-                reply_markup=get_topics_settings_keyboard(),
+                reply_markup=updated_kb,
                 parse_mode="HTML",
             )
     except Exception as e:
         logger.debug(f"Could not auto-update admin topics message in DM: {e}")
+
+
+@router.message(Command("set_digest_thread", "set_events_thread", ignore_case=True))
+async def cmd_set_digest_thread(message: Message):
+    if message.chat.type not in ["group", "supergroup"]:
+        await message.reply("❌ Эту команду нужно вызывать в группе/супергруппе в нужном топике (например, в «Активности»).")
+        return
+
+    thread_id = message.message_thread_id
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if thread_id is None:
+        await db.set_setting("events_digest_thread_id", "0")
+        topic_status = "Общий чат (General)"
+        notice_text = "✅ Привязка сброшена: еженедельная афиша событий будет публиковаться в общий чат.\n<i>(Сообщение удалится через 5 сек.)</i>"
+    else:
+        await db.set_setting("events_digest_thread_id", str(thread_id))
+        await db.set_setting("events_digest_enabled", "1")
+        topic_status = f"ID {thread_id} (привязан ✅)"
+        notice_text = (
+            f"✅ Топик еженедельной афиши событий привязан (ID темы: <code>{thread_id}</code>) и авто-публикация включена.\n"
+            "<i>(Сообщение удалится через 5 сек.)</i>"
+        )
+
+    try:
+        sent_notice = await message.bot.send_message(
+            chat_id=message.chat.id,
+            message_thread_id=thread_id,
+            text=notice_text,
+            parse_mode="HTML",
+        )
+        import asyncio
+        asyncio.create_task(_auto_delete_message(sent_notice, 5.0))
+    except Exception:
+        pass
+
+    try:
+        ref = await db.get_setting("admin_topics_msg_ref", "")
+        if ref and ":" in ref:
+            ref_chat_id_str, ref_msg_id_str = ref.split(":", 1)
+            updated_text, updated_kb = await _build_topics_settings_view(
+                extra_note=f"\n\n✅ <b>Обновлено только что (Афиша событий):</b> {topic_status}."
+            )
+            await message.bot.edit_message_text(
+                chat_id=int(ref_chat_id_str),
+                message_id=int(ref_msg_id_str),
+                text=updated_text,
+                reply_markup=updated_kb,
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.debug(f"Could not auto-update admin topics message in DM: {e}")
+
+
+@router.message(Command("post_digest", ignore_case=True))
+async def cmd_post_digest(message: Message):
+    """Публикует и закрепляет еженедельную афишу событий в группе немедленно."""
+    from app.services.events_digest import publish_weekly_events_digest
+
+    res = await publish_weekly_events_digest(message.bot, force=True)
+    if res.get("ok"):
+        pin_info = "и закреплено 📌" if res.get("pinned") else "(опубликовано без закрепа — дайте боту право закреплять сообщения)"
+        thread_info = f"топик ID {res['thread_id']}" if res.get("thread_id") else "общий чат (General)"
+        await message.answer(
+            f"✅ Еженедельная афиша ({res['events_count']} событий) отправлена в {thread_info} {pin_info}."
+        )
+    elif res.get("reason") == "no_events":
+        await message.answer("ℹ️ На ближайшие 7 дней нет запланированных событий — афиша не опубликована.")
+    elif res.get("reason") == "no_main_group":
+        await message.answer("❌ Не задан <code>MAIN_GROUP_ID</code> в конфигурации бота.", parse_mode="HTML")
+    else:
+        await message.answer(f"❌ Не удалось опубликовать афишу: {res.get('reason')}")
 
 
 @router.message(Command("status", ignore_case=True))

@@ -439,3 +439,9 @@ async def process_scheduled_broadcasts(bot: Bot):
                 await db.mark_scheduled_broadcast_status(b['id'], 'failed')
     except Exception as e:
         logger.error(f"Error in process_scheduled_broadcasts: {e}", exc_info=True)
+
+
+async def check_and_send_weekly_digest(bot: Bot):
+    """Проверяет расписание и при необходимости публикует еженедельную афишу событий."""
+    from app.services.events_digest import check_and_send_weekly_digest as _run_weekly_digest
+    await _run_weekly_digest(bot)

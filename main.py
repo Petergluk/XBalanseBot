@@ -144,7 +144,7 @@ async def private_chat_restriction_middleware(handler, event, data: dict):
                     "/list_tag_rules", "/add_tag_rule", "/create_act", "/create_event",
                     "/gide", "/гид", "/test", "/activity", "/activities", "/afisha", "/event", "/start",
                     "/join", "/link", "/offer", "/create_offer", "/reset", "/rebalance",
-                    "/pay_from_fund", "/fund", "/fund_pay", "/cancel_broadcast", "/status", "/cancel"
+                    "/pay_from_fund", "/fund", "/fund_pay", "/cancel_broadcast", "/status", "/post_digest", "/cancel"
                 }
 
                 if command in private_commands:
@@ -250,13 +250,11 @@ async def setup_bot_commands(bot: Bot):
         logger.warning(f"Could not configure scoped commands: {e}")
     logger.info(f"Bot commands set: 0 private user commands (button-only), {len(group_commands)} group commands.")
 
-    # Расширенные команды для всех администраторов и супер-админа
+    # Компактное меню администраторов (только команды без дублей кнопок /menu -> Справка -> Гид)
     admin_commands = [
         BotCommand(command="menu", description="🤖 Главное меню"),
         BotCommand(command="settings", description="⚙️ Настройки бота"),
         BotCommand(command="status", description="🩺 Статус системы"),
-        BotCommand(command="gide", description="🔐 Гид администратора"),
-        BotCommand(command="help", description="📖 Справка"),
     ]
     admin_ids = set()
     if SUPER_ADMIN_ID:
@@ -284,6 +282,14 @@ async def setup_scheduler(bot: Bot, scheduler: AsyncIOScheduler):
         minutes=1,
         args=(bot,),
         id='process_scheduled_broadcasts',
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        scheduler_jobs.check_and_send_weekly_digest,
+        'interval',
+        minutes=1,
+        args=(bot,),
+        id='weekly_events_digest',
         replace_existing=True,
     )
 

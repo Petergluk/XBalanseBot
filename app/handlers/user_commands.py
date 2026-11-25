@@ -47,27 +47,45 @@ _bottom_kb_role_cache: dict[int, str] = {}
 
 async def ensure_role_bottom_keyboard(bot: Bot, user_id: int, user_is_admin: bool | None = None, force: bool = False):
     """
-    Гарантирует правильный режим интерфейса в ЛС:
-    - Для обычного пользователя: закрепляет единственную нижнюю кнопку «🏠 Главное меню» (1 клик)
+    Гарантирует правильный режим интерфейса в ЛС с сохранением статуса в БД (чтобы рестарт сервера не повторял сообщения):
+    - Для обычного пользователя: один раз закрепляет нижнюю кнопку «🏠 Главное меню» (1 клик)
       и очищает персональный список команд (если он был закэширован).
-    - Для администратора: удаляет нижние кнопки (ReplyKeyboardRemove), оставляя только команды /.
+    - Для администратора: тихо удаляет нижние кнопки (ReplyKeyboardRemove + мгновенное удаление тех. сообщения),
+      не оставляя в чате лишних уведомлений.
     """
     try:
         if user_is_admin is None:
             user_is_admin = await is_admin(user_id)
         target_role = "admin" if user_is_admin else "user"
-        if not force and _bottom_kb_role_cache.get(user_id) == target_role:
-            return
+        if not force:
+            if _bottom_kb_role_cache.get(user_id) == target_role:
+                return
+            try:
+                persisted_role = await db.get_setting(f"kb_mode:{user_id}", "")
+            except Exception:
+                persisted_role = ""
+            if persisted_role == target_role:
+                _bottom_kb_role_cache[user_id] = target_role
+                return
+
         _bottom_kb_role_cache[user_id] = target_role
+        try:
+            await db.set_setting(f"kb_mode:{user_id}", target_role)
+        except Exception as db_err:
+            logger.debug(f"Could not persist kb_mode for {user_id}: {db_err}")
+
         if user_is_admin:
             from aiogram.types import ReplyKeyboardRemove
-            await bot.send_message(
+            cleanup_msg = await bot.send_message(
                 user_id,
-                "⌨️ <i>Нижняя панель кнопок убрана (для администратора активно меню команд).</i>",
+                "🔄",
                 reply_markup=ReplyKeyboardRemove(),
-                parse_mode="HTML",
                 disable_notification=True,
             )
+            try:
+                await cleanup_msg.delete()
+            except Exception:
+                pass
         else:
             from aiogram.types import BotCommandScopeChat
             from app.keyboards import get_persistent_bottom_keyboard
@@ -77,7 +95,7 @@ async def ensure_role_bottom_keyboard(bot: Bot, user_id: int, user_is_admin: boo
                 pass
             await bot.send_message(
                 user_id,
-                "⌨️ <i>Быстрая кнопка меню закреплена внизу экрана.</i>",
+                "👇 <i>Внизу экрана закреплена быстрая кнопка «🏠 Главное меню».</i>",
                 reply_markup=get_persistent_bottom_keyboard(),
                 parse_mode="HTML",
                 disable_notification=True,

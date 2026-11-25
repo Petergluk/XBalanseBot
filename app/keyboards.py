@@ -449,11 +449,78 @@ def get_bonus_source_settings_keyboard(current_mode: str = "stepwise") -> Inline
     return builder.as_markup()
 
 
-def get_topics_settings_keyboard() -> InlineKeyboardMarkup:
-    """Создает клавиатуру настроек топиков."""
+def get_topics_settings_keyboard(
+    digest_enabled: bool = False,
+    weekday_label: str = "Пн",
+    time_label: str = "09:00",
+) -> InlineKeyboardMarkup:
+    """Создает клавиатуру настроек топиков и еженедельной афиши событий."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="❌ Сбросить топик (в общий чат)", callback_data=SettingsAction(action="reset_market_thread").pack()))
+    toggle_label = (
+        "🔔 Авто-афиша событий: ВКЛ"
+        if digest_enabled
+        else "🔕 Авто-афиша событий: ВЫКЛ"
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=toggle_label,
+            callback_data=SettingsAction(action="toggle_events_digest", enabled=not digest_enabled).pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=f"🗓 День и время: {weekday_label}, {time_label} МСК",
+            callback_data=SettingsAction(action="menu_digest_schedule").pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="🚀 Опубликовать и закрепить сейчас",
+            callback_data=SettingsAction(action="post_digest_now").pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ Сбросить топик Маркета",
+            callback_data=SettingsAction(action="reset_market_thread").pack(),
+        ),
+        InlineKeyboardButton(
+            text="❌ Сбросить топик Афиши",
+            callback_data=SettingsAction(action="reset_digest_thread").pack(),
+        ),
+    )
     builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="back_to_settings").pack()))
+    return builder.as_markup()
+
+
+def get_digest_schedule_keyboard(current_weekday: int = 0) -> InlineKeyboardMarkup:
+    """Создает клавиатуру выбора дня недели и времени публикации еженедельной афиши."""
+    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    builder = InlineKeyboardBuilder()
+    day_buttons = []
+    for idx, label in enumerate(weekdays):
+        prefix = "✅ " if idx == current_weekday else ""
+        day_buttons.append(
+            InlineKeyboardButton(
+                text=f"{prefix}{label}",
+                callback_data=SettingsAction(action=f"set_digest_day_{idx}").pack(),
+            )
+        )
+    builder.row(*day_buttons[:4])
+    builder.row(*day_buttons[4:])
+    builder.row(
+        InlineKeyboardButton(text="🕘 09:00", callback_data=SettingsAction(action="set_digest_time_0900").pack()),
+        InlineKeyboardButton(text="🕛 12:00", callback_data=SettingsAction(action="set_digest_time_1200").pack()),
+        InlineKeyboardButton(text="🕕 18:00", callback_data=SettingsAction(action="set_digest_time_1800").pack()),
+        InlineKeyboardButton(text="🕗 20:00", callback_data=SettingsAction(action="set_digest_time_2000").pack()),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="⌨️ Ввести своё время (ЧЧ:ММ)",
+            callback_data=SettingsAction(action="prompt_digest_time").pack(),
+        )
+    )
+    builder.row(InlineKeyboardButton(text=LEXICON_RU["btn_back"], callback_data=SettingsAction(action="menu_topics").pack()))
     return builder.as_markup()
 
 async def get_demurrage_settings_keyboard(is_enabled: bool) -> InlineKeyboardMarkup:
